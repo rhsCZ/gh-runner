@@ -54,6 +54,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      version: ${{ steps.release.outputs.version }}
+      branch_slug: ${{ steps.release.outputs.branch_slug }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -66,6 +70,7 @@ jobs:
           merge-multiple: true
 
       - name: Publish GitHub Release
+        id: release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,3 +96,84 @@ jobs:
           fi
 
           gh release upload "${release_tag}" release-assets/* --clobber
+
+          printf 'release_tag=%s\n' "${release_tag}" >> "${GITHUB_OUTPUT}"
+          printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+          printf 'branch_slug=%s\n' "${branch_slug}" >> "${GITHUB_OUTPUT}"
+
+  publish-image:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      REGISTRY: ghcr.io
+      RUNNER_DOWNLOAD_BASE: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ needs.release.outputs.release_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute image metadata
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          image_name="${owner}/actions-runner"
+
+          printf 'image_name=%s\n' "${image_name}" >> "${GITHUB_OUTPUT}"
+          printf 'version_tag=%s\n' "${{ needs.release.outputs.version }}" >> "${GITHUB_OUTPUT}"
+          printf 'branch_tag=%s\n' "v${{ needs.release.outputs.version }}-${{ needs.release.outputs.branch_slug }}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare docker build context
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f images/Dockerfile
+          perl -0pi -e 's#https://github.com/actions/runner/releases/download/v\$\{RUNNER_VERSION\}#$ENV{RUNNER_DOWNLOAD_BASE}#g' images/Dockerfile
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push docker image
+        id: build-and-push
+        uses: docker/build-push-action@v7
+        with:
+          context: ./images
+          platforms: |
+            linux/amd64
+            linux/arm64
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.version_tag }}
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.branch_tag }}
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}:latest
+          build-args: |
+            RUNNER_VERSION=${{ needs.release.outputs.version }}
+          push: true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+          annotations: |
+            org.opencontainers.image.description=${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ needs.release.outputs.release_tag }}
+
+      - name: Generate attestation
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          push-to-registry: true
