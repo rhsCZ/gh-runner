@@ -1,0 +1,59 @@
+name: Build Runner Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "releases/**"
+    paths:
+      - "src/**"
+      - "releaseVersion"
+      - "runnerversion"
+      - "patches/**"
+      - "scripts/**"
+      - ".github/workflows/build-runner-test.yml"
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: linux-x64
+            os: ubuntu-latest
+          - runtime: linux-arm64
+            os: ubuntu-latest
+          - runtime: linux-arm
+            os: ubuntu-latest
+          - runtime: osx-x64
+            os: macos-latest
+          - runtime: osx-arm64
+            os: macos-latest
+          - runtime: win-x64
+            os: windows-latest
+          - runtime: win-arm64
+            os: windows-latest
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate runner source exists
+        shell: bash
+        run: |
+          test -f src/ActionsRunner.sln
+
+      - name: Build and package runner
+        shell: bash
+        run: |
+          scripts/build-runner.sh --source-dir "$PWD" --runtime "${{ matrix.runtime }}" --configuration Release --package
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-test-packages-${{ matrix.runtime }}
+          path: _package/*
+          if-no-files-found: error

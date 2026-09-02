@@ -21,9 +21,10 @@ actions/runner history -> upstream release HEAD -> local orchestration overlay -
 
 ## Repository Layout
 
-- `.github/workflows/sync-upstream.yml` imports a selected upstream release branch and dispatches the build workflow.
-- `.github/workflows/watch-upstream-releases.yml` runs on a schedule, checks the latest upstream runner release, imports it when needed, and dispatches a build.
-- `.github/workflows/build-runner.yml` builds packages for supported runtime IDs and publishes them to a GitHub Release.
+- `.github/workflows/sync-upstream.yml` imports a selected upstream release branch and dispatches the release build workflow.
+- `.github/workflows/watch-upstream-releases.yml` runs on a schedule, checks the latest upstream runner release, imports it when needed, and dispatches a release build.
+- `.github/workflows/build-runner.yml` is dispatch-only; it builds packages for supported runtime IDs and publishes them to a GitHub Release.
+- `.github/workflows/build-runner-test.yml` runs on push or manual dispatch and uploads build artifacts without creating a GitHub Release.
 - `scripts/import-upstream-history.sh` creates the local branch from full upstream history, overlays local automation, and commits patches.
 - `scripts/apply-patches.sh` applies the patch series with limited fuzz so small upstream context shifts can be tolerated.
 - `scripts/build-runner.sh` wraps the upstream runner build and package commands.

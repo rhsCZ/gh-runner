@@ -2,16 +2,6 @@ name: Build Runner
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - "releases/**"
-    paths:
-      - "src/**"
-      - "releaseVersion"
-      - "runnerversion"
-      - "patches/**"
-      - "scripts/**"
-      - ".github/workflows/build-runner.yml"
 
 jobs:
   build:
@@ -23,25 +13,18 @@ jobs:
         include:
           - runtime: linux-x64
             os: ubuntu-latest
-            shell: bash
           - runtime: linux-arm64
             os: ubuntu-latest
-            shell: bash
           - runtime: linux-arm
             os: ubuntu-latest
-            shell: bash
           - runtime: osx-x64
             os: macos-latest
-            shell: bash
           - runtime: osx-arm64
             os: macos-latest
-            shell: bash
           - runtime: win-x64
             os: windows-latest
-            shell: bash
           - runtime: win-arm64
             os: windows-latest
-            shell: bash
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -54,7 +37,7 @@ jobs:
           test -f src/ActionsRunner.sln
 
       - name: Build and package runner
-        shell: ${{ matrix.shell }}
+        shell: bash
         run: |
           scripts/build-runner.sh --source-dir "$PWD" --runtime "${{ matrix.runtime }}" --configuration Release --package
 
