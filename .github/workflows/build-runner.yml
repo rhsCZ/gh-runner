@@ -57,7 +57,6 @@ jobs:
     outputs:
       release_tag: ${{ steps.release.outputs.release_tag }}
       version: ${{ steps.release.outputs.version }}
-      branch_slug: ${{ steps.release.outputs.branch_slug }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -83,9 +82,8 @@ jobs:
             exit 1
           fi
 
-          branch_slug=$(printf '%s' "${GITHUB_REF_NAME}" | tr '[:upper:]/' '[:lower:]-' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+|-+$//g')
-          release_tag="runner-v${version}-${branch_slug}"
-          release_title="Runner v${version} (${GITHUB_REF_NAME})"
+          release_tag="v${version}"
+          release_title="${release_tag}"
 
           if ! gh release view "${release_tag}" >/dev/null 2>&1; then
             gh release create "${release_tag}" \
@@ -99,7 +97,6 @@ jobs:
 
           printf 'release_tag=%s\n' "${release_tag}" >> "${GITHUB_OUTPUT}"
           printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
-          printf 'branch_slug=%s\n' "${branch_slug}" >> "${GITHUB_OUTPUT}"
 
   publish-image:
     needs: release
@@ -122,12 +119,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          image_name="${owner}/actions-runner"
+          image_name=$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
 
           printf 'image_name=%s\n' "${image_name}" >> "${GITHUB_OUTPUT}"
           printf 'version_tag=%s\n' "${{ needs.release.outputs.version }}" >> "${GITHUB_OUTPUT}"
-          printf 'branch_tag=%s\n' "v${{ needs.release.outputs.version }}-${{ needs.release.outputs.branch_slug }}" >> "${GITHUB_OUTPUT}"
+          printf 'release_tag=%s\n' "v${{ needs.release.outputs.version }}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare docker build context
         shell: bash
@@ -160,7 +156,7 @@ jobs:
             linux/arm64
           tags: |
             ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.version_tag }}
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.branch_tag }}
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.release_tag }}
             ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}:latest
           build-args: |
             RUNNER_VERSION=${{ needs.release.outputs.version }}

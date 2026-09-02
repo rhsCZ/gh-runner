@@ -23,7 +23,7 @@ actions/runner history -> upstream release HEAD -> local orchestration overlay -
 
 - `.github/workflows/sync-upstream.yml` imports a selected upstream release branch and dispatches the release build workflow.
 - `.github/workflows/watch-upstream-releases.yml` runs on a schedule, checks the latest upstream runner release, imports it when needed, and dispatches a release build.
-- `.github/workflows/build-runner.yml` is dispatch-only; it builds packages, publishes them to a GitHub Release, and pushes a GHCR docker image.
+- `.github/workflows/build-runner.yml` is dispatch-only; it builds packages, publishes them to a GitHub Release, and pushes a GHCR docker image named after this repository, such as `ghcr.io/rhscz/gh-runner`.
 - `.github/workflows/build-runner-test.yml` runs on push or manual dispatch and uploads package plus docker image artifacts without creating a GitHub Release or pushing to GHCR.
 - `scripts/import-upstream-history.sh` creates the local branch from full upstream history, overlays local automation, and commits patches.
 - `scripts/apply-patches.sh` applies the patch series with limited fuzz so small upstream context shifts can be tolerated.
@@ -44,6 +44,9 @@ The source notes for the desired behavior live outside this repository at
 
 The orchestration branch is expected to be `master`. Imported runner branches can
 use the same names as upstream, such as `releases/m337`.
+
+GitHub Release tags use the same format as upstream `actions/runner`, such as
+`v2.337.0`.
 
 Upstream workflow files may exist in older imported history because they are part
 of the original `actions/runner` commits. They are removed again at the imported

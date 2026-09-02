@@ -87,7 +87,7 @@ jobs:
           set -euo pipefail
 
           version=$(tr -d '[:space:]' < releaseVersion)
-          owner=$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          image_name=$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
           branch_slug=$(printf '%s' "${GITHUB_REF_NAME}" | tr '[:upper:]/' '[:lower:]-' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+|-+$//g')
 
           mkdir -p docker-context/runner-packages docker-images
@@ -165,7 +165,7 @@ jobs:
           USER runner
           EOF
 
-          printf 'IMAGE_NAME=ghcr.io/%s/actions-runner\n' "${owner}" >> "${GITHUB_ENV}"
+          printf 'IMAGE_NAME=ghcr.io/%s\n' "${image_name}" >> "${GITHUB_ENV}"
           printf 'IMAGE_TAG=test-v%s-%s\n' "${version}" "${branch_slug}" >> "${GITHUB_ENV}"
           printf 'IMAGE_ARCHIVE=actions-runner-test-v%s-%s.oci.tar\n' "${version}" "${branch_slug}" >> "${GITHUB_ENV}"
           printf 'RUNNER_VERSION=%s\n' "${version}" >> "${GITHUB_ENV}"

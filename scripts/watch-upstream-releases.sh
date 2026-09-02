@@ -72,8 +72,7 @@ if git ls-remote --exit-code origin "refs/heads/${target_branch}" >/dev/null 2>&
     imported_commit=$(git show FETCH_HEAD:config/upstream-import.json 2>/dev/null | jq -r '.commit // empty' || true)
 fi
 
-branch_slug=$(printf '%s' "${target_branch}" | tr '[:upper:]/' '[:lower:]-' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+|-+$//g')
-release_name="runner-v${release_version}-${branch_slug}"
+release_name="v${release_version}"
 
 needs_import=false
 if [[ "${imported_commit}" != "${upstream_commit}" ]]; then
