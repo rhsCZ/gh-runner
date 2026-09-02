@@ -37,9 +37,6 @@ Patch order is controlled by `patches/series.txt`. The patcher uses
 `patch --forward --fuzz=3`; this lets it survive small context movement while
 still failing when a hunk cannot be applied.
 
-The source notes for the desired behavior live outside this repository at
-`/root/gh-runner-edit-notes.md`.
-
 ## Release Branches
 
 The orchestration branch is expected to be `master`. Imported runner branches can
