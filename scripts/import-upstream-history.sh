@@ -10,7 +10,7 @@ repository=${UPSTREAM_REPOSITORY}
 branch=${UPSTREAM_BRANCH}
 ref=${UPSTREAM_REF:-}
 target_branch=
-control_ref=main
+control_ref=master
 
 usage() {
     cat <<'EOF'
@@ -25,7 +25,7 @@ Options:
   --branch <name>         Upstream branch to import
   --ref <ref>             Optional upstream commit/tag; defaults to --branch
   --target-branch <name>  Local branch to create or replace
-  --control-ref <ref>     Ref containing orchestration files (default: main)
+  --control-ref <ref>     Ref containing orchestration files (default: master)
 EOF
 }
 

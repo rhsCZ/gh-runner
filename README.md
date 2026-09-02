@@ -3,7 +3,7 @@
 Custom orchestration repository for building a patched GitHub Actions runner.
 
 This repository keeps automation, patch files, and GitHub workflows only. It does
-not vendor the `actions/runner` source tree into `main`.
+not vendor the `actions/runner` source tree into `master`.
 
 ## Goal
 
@@ -42,7 +42,7 @@ The source notes for the desired behavior live outside this repository at
 
 ## Release Branches
 
-The orchestration branch is expected to be `main`. Imported runner branches can
+The orchestration branch is expected to be `master`. Imported runner branches can
 use the same names as upstream, such as `releases/m337`.
 
 Upstream workflow files may exist in older imported history because they are part

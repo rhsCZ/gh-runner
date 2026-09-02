@@ -28,7 +28,7 @@ jobs:
       - name: Checkout orchestration branch
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: master
           fetch-depth: 0
 
       - name: Configure git identity
@@ -55,7 +55,7 @@ jobs:
           scripts/import-upstream-history.sh \
             --branch "${{ steps.upstream.outputs.upstream_branch }}" \
             --target-branch "${{ steps.upstream.outputs.target_branch }}" \
-            --control-ref main
+            --control-ref master
 
       - name: Push imported branch
         if: ${{ steps.upstream.outputs.needs_import == 'true' }}
