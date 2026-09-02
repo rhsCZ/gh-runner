@@ -25,6 +25,7 @@ namespace GitHub.Runner.Listener.Configuration
         Task ConfigureAsync(CommandSettings command);
         Task UnconfigureAsync(CommandSettings command);
         void ListProfiles();
+        void SetGlobalOptions(CommandSettings command);
         void DeleteLocalRunnerConfig();
         RunnerSettings LoadSettings();
         RunnerSettings LoadMigratedSettings();
@@ -717,6 +718,36 @@ namespace GitHub.Runner.Listener.Configuration
             {
                 _term.WriteLine($"{profile.Name}\t{profile.Settings.AgentName}\t{profile.Settings.GitHubUrl ?? profile.Settings.ServerUrl}");
             }
+        }
+
+        public void SetGlobalOptions(CommandSettings command)
+        {
+            var rawMaxConcurrentJobs = command.GetMaxConcurrentJobsInput();
+            if (string.IsNullOrWhiteSpace(rawMaxConcurrentJobs))
+            {
+                throw new InvalidOperationException("The set command currently requires --maxconcurrentjobs <positive integer>.");
+            }
+
+            if (!int.TryParse(rawMaxConcurrentJobs, out var maxConcurrentJobs) || maxConcurrentJobs <= 0)
+            {
+                throw new InvalidOperationException("--maxconcurrentjobs must be a positive integer.");
+            }
+
+            var options = LoadGlobalOptions();
+            options.MaxConcurrentJobs = maxConcurrentJobs;
+            IOUtil.SaveObject(options, HostContext.GetConfigFile(WellKnownConfigFile.Options));
+            _term.WriteSuccessMessage($"Saved shared runner option maxConcurrentJobs={maxConcurrentJobs} to .options");
+        }
+
+        private RunnerGlobalOptions LoadGlobalOptions()
+        {
+            var optionsFile = HostContext.GetConfigFile(WellKnownConfigFile.Options);
+            if (!System.IO.File.Exists(optionsFile))
+            {
+                return new RunnerGlobalOptions();
+            }
+
+            return IOUtil.LoadObject<RunnerGlobalOptions>(optionsFile) ?? new RunnerGlobalOptions();
         }
 
         private ICredentialProvider GetCredentialProvider(CommandSettings command, string serverUrl)

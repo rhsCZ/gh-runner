@@ -2,10 +2,12 @@
 using GitHub.Runner.Listener;
 using GitHub.Runner.Listener.Configuration;
 using GitHub.Runner.Common.Util;
+using GitHub.Runner.Sdk;
 using GitHub.Services.WebApi;
 using Moq;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -447,5 +449,32 @@ namespace GitHub.Runner.Common.Tests.Listener.Configuration
             }
         }
 #endif
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "ConfigurationManagement")]
+        public void SetGlobalOptions_SavesMaxConcurrentJobs()
+        {
+            using (TestHostContext tc = CreateTestContext())
+            {
+                IConfigurationManager configManager = new ConfigurationManager();
+                configManager.Initialize(tc);
+
+                var command = new CommandSettings(
+                    tc,
+                    new[]
+                    {
+                        "set",
+                        "--maxconcurrentjobs", "7",
+                    });
+
+                configManager.SetGlobalOptions(command);
+
+                var optionsPath = tc.GetConfigFile(WellKnownConfigFile.Options);
+                Assert.True(File.Exists(optionsPath));
+                var saved = IOUtil.LoadObject<RunnerGlobalOptions>(optionsPath, required: true);
+                Assert.Equal(7, saved.MaxConcurrentJobs);
+            }
+        }
     }
 }

@@ -180,6 +180,21 @@ namespace GitHub.Runner.Listener
                     }
                 }
 
+                if (command.Set)
+                {
+                    try
+                    {
+                        configManager.SetGlobalOptions(command);
+                        return Constants.Runner.ReturnCode.Success;
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.Error(ex);
+                        _term.WriteError(ex.Message);
+                        return Constants.Runner.ReturnCode.TerminatedError;
+                    }
+                }
+
                 // remove config files, remove service, and exit
                 if (command.Remove)
                 {
@@ -351,7 +366,7 @@ namespace GitHub.Runner.Listener
                     // Run the runner interactively or as service
                     if (useMultiProfileMode)
                     {
-                        return await ExecuteMultiRepoRunnerAsync(profileDirectoryProfiles);
+                        return await ExecuteMultiRepoRunnerAsync(profileDirectoryProfiles, command.GetMaxConcurrentJobs());
                     }
 
                     return await ExecuteRunnerAsync(settings, command.RunOnce || settings.Ephemeral || returnJobResultForHosted, returnJobResultForHosted);
@@ -947,7 +962,7 @@ namespace GitHub.Runner.Listener
             return returnCode;
         }
 
-        private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile> profiles)
+        private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile> profiles, int maxConcurrentJobs)
         {
             if (profiles.Any(x => !x.Settings.UseV2Flow))
             {
@@ -991,10 +1006,11 @@ namespace GitHub.Runner.Listener
             }
 
             _term.WriteLine($"Current runner version: '{BuildConstants.RunnerPackage.Version}'");
-            _term.WriteLine($"{DateTime.UtcNow:u}: Listening for Jobs across {listenerContexts.Count} repositories");
+            var effectiveMaxConcurrentJobs = Math.Max(1, Math.Min(maxConcurrentJobs, listenerContexts.Count));
+            _term.WriteLine($"{DateTime.UtcNow:u}: Listening for Jobs across {listenerContexts.Count} repositories (max parallel jobs: {effectiveMaxConcurrentJobs})");
 
             var pendingScheduler = new MultiRepoPendingScheduler();
-            IJobDispatcher activeDispatcher = null;
+            var activeDispatchers = new List<ActiveMultiRepoDispatch>();
             bool shuttingDown = false;
             try
             {
@@ -1005,22 +1021,20 @@ namespace GitHub.Runner.Listener
 
                 while (!HostContext.RunnerShutdownToken.IsCancellationRequested)
                 {
-                    if (activeDispatcher != null && !activeDispatcher.Busy)
+                    await DrainCompletedMultiRepoDispatchersAsync(activeDispatchers, listenerContexts);
+
+                    if (activeDispatchers.Count < effectiveMaxConcurrentJobs && pendingScheduler.TryDequeue(out var pendingContext))
                     {
-                        await activeDispatcher.WaitAsync(CancellationToken.None);
-                        foreach (var context in listenerContexts)
+                        var activeDispatcher = await TryDispatchNextJobForProfileAsync(pendingContext, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
+                        if (activeDispatcher != null)
                         {
-                            activeDispatcher.JobStatus -= context.Listener.OnJobStatus;
+                            activeDispatchers.Add(activeDispatcher);
+                            if (activeDispatchers.Count == 1)
+                            {
+                                BroadcastMultiRepoJobStatus(listenerContexts, TaskAgentStatus.Busy);
+                            }
                         }
 
-                        await activeDispatcher.ShutdownAsync();
-                        activeDispatcher = null;
-                        configurationStore.ClearActiveRunnerSettings();
-                    }
-
-                    if (activeDispatcher == null && pendingScheduler.TryDequeue(out var pendingContext))
-                    {
-                        activeDispatcher = await TryDispatchNextJobForProfileAsync(pendingContext, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
                         if (pendingContext.PollTask == null)
                         {
                             pendingContext.PollTask = pendingContext.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
@@ -1079,10 +1093,18 @@ namespace GitHub.Runner.Listener
                         message,
                         listenerContexts,
                         pendingScheduler,
-                        activeDispatcher,
+                        activeDispatchers,
+                        effectiveMaxConcurrentJobs,
                         configurationStore);
 
-                    activeDispatcher ??= messageResult.Dispatcher;
+                    if (messageResult.Dispatcher != null)
+                    {
+                        activeDispatchers.Add(messageResult.Dispatcher);
+                        if (activeDispatchers.Count == 1)
+                        {
+                            BroadcastMultiRepoJobStatus(listenerContexts, TaskAgentStatus.Busy);
+                        }
+                    }
 
                     if (messageResult.ContinuePolling && completedContext.PollTask == null && !completedContext.PendingWork)
                     {
@@ -1096,14 +1118,9 @@ namespace GitHub.Runner.Listener
             }
             finally
             {
-                if (activeDispatcher != null)
+                foreach (var activeDispatcher in activeDispatchers)
                 {
-                    foreach (var context in listenerContexts)
-                    {
-                        activeDispatcher.JobStatus -= context.Listener.OnJobStatus;
-                    }
-
-                    await activeDispatcher.ShutdownAsync();
+                    await activeDispatcher.Dispatcher.ShutdownAsync();
                 }
 
                 configurationStore.ClearActiveRunnerSettings();
@@ -1126,19 +1143,20 @@ namespace GitHub.Runner.Listener
             return listener;
         }
 
-        private async Task<(bool ContinuePolling, IJobDispatcher Dispatcher)> HandleMultiRepoMessageAsync(
+        private async Task<(bool ContinuePolling, ActiveMultiRepoDispatch Dispatcher)> HandleMultiRepoMessageAsync(
             RepositoryListenerContext context,
             TaskAgentMessage message,
             IReadOnlyList<RepositoryListenerContext> listenerContexts,
             MultiRepoPendingScheduler pendingScheduler,
-            IJobDispatcher activeDispatcher,
+            IReadOnlyList<ActiveMultiRepoDispatch> activeDispatchers,
+            int maxConcurrentJobs,
             IConfigurationStore configurationStore)
         {
             HostContext.WritePerfCounter($"MessageReceived_{message.MessageType}_{context.Profile.Name}");
 
             if (MessageUtil.IsRunServiceJob(message.MessageType))
             {
-                if (activeDispatcher == null)
+                if (activeDispatchers.Count < maxConcurrentJobs)
                 {
                     var dispatched = await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
                     return (dispatched == null, dispatched);
@@ -1154,10 +1172,16 @@ namespace GitHub.Runner.Listener
 
             if (string.Equals(message.MessageType, JobCancelMessage.MessageType, StringComparison.OrdinalIgnoreCase))
             {
-                if (activeDispatcher != null)
+                if (activeDispatchers.Count > 0)
                 {
                     var cancelJobMessage = JsonUtility.FromString<JobCancelMessage>(message.Body);
-                    activeDispatcher.Cancel(cancelJobMessage);
+                    foreach (var activeDispatcher in activeDispatchers)
+                    {
+                        if (activeDispatcher.Dispatcher.Cancel(cancelJobMessage))
+                        {
+                            break;
+                        }
+                    }
                 }
 
                 return (true, null);
@@ -1186,7 +1210,7 @@ namespace GitHub.Runner.Listener
             return (true, null);
         }
 
-        private async Task<IJobDispatcher> TryDispatchNextJobForProfileAsync(
+        private async Task<ActiveMultiRepoDispatch> TryDispatchNextJobForProfileAsync(
             RepositoryListenerContext context,
             IReadOnlyList<RepositoryListenerContext> listenerContexts,
             IConfigurationStore configurationStore,
@@ -1207,18 +1231,25 @@ namespace GitHub.Runner.Listener
                         message,
                         listenerContexts,
                         new MultiRepoPendingScheduler(),
-                        null,
+                        Array.Empty<ActiveMultiRepoDispatch>(),
+                        1,
                         configurationStore);
                     continue;
                 }
 
-                return await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, cancellationToken);
+                var activeDispatcher = await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, cancellationToken);
+                if (activeDispatcher == null)
+                {
+                    continue;
+                }
+
+                return activeDispatcher;
             }
 
             return null;
         }
 
-        private async Task<IJobDispatcher> TryDispatchBrokerMessageAsync(
+        private async Task<ActiveMultiRepoDispatch> TryDispatchBrokerMessageAsync(
             RepositoryListenerContext context,
             TaskAgentMessage message,
             IReadOnlyList<RepositoryListenerContext> listenerContexts,
@@ -1249,14 +1280,48 @@ namespace GitHub.Runner.Listener
             configurationStore.SetActiveRunnerSettings(context.Profile.Settings);
 
             var jobDispatcher = HostContext.CreateService<IJobDispatcher>();
-            foreach (var listenerContext in listenerContexts)
+            configurationStore.ClearActiveRunnerSettings();
+
+            jobDispatcher.Run(jobRequestMessage, false, context.Profile.RootPath);
+            return new ActiveMultiRepoDispatch(context, jobDispatcher);
+        }
+
+        private async Task DrainCompletedMultiRepoDispatchersAsync(
+            List<ActiveMultiRepoDispatch> activeDispatchers,
+            IReadOnlyList<RepositoryListenerContext> listenerContexts)
+        {
+            var hadActiveDispatchers = activeDispatchers.Count > 0;
+            for (var index = activeDispatchers.Count - 1; index >= 0; index--)
             {
-                jobDispatcher.JobStatus += listenerContext.Listener.OnJobStatus;
+                var activeDispatcher = activeDispatchers[index];
+                if (activeDispatcher.Dispatcher.Busy)
+                {
+                    continue;
+                }
+
+                await activeDispatcher.Dispatcher.WaitAsync(CancellationToken.None);
+                await activeDispatcher.Dispatcher.ShutdownAsync();
+                activeDispatchers.RemoveAt(index);
             }
 
-            jobDispatcher.Run(jobRequestMessage, false);
-            return jobDispatcher;
+            if (hadActiveDispatchers && activeDispatchers.Count == 0)
+            {
+                BroadcastMultiRepoJobStatus(listenerContexts, TaskAgentStatus.Online);
+            }
         }
+
+        private static void BroadcastMultiRepoJobStatus(
+            IReadOnlyList<RepositoryListenerContext> listenerContexts,
+            TaskAgentStatus status)
+        {
+            var jobStatus = new JobStatusEventArgs(status);
+            foreach (var context in listenerContexts)
+            {
+                context.Listener.OnJobStatus(null, jobStatus);
+            }
+        }
+
+        private sealed record ActiveMultiRepoDispatch(RepositoryListenerContext Context, IJobDispatcher Dispatcher);
 
         private async Task<Pipelines.AgentJobRequestMessage> AcquireJobMessageAsync(
             RunnerProfile profile,
@@ -1510,6 +1575,7 @@ namespace GitHub.Runner.Listener
             _term.WriteLine($@"
 Commands:
  .{separator}config.{ext}         Configures the runner
+ .{separator}config.{ext} set     Saves shared runner defaults into root .options
  .{separator}config.{ext} remove  Unconfigures the runner
  .{separator}run.{ext}            Runs the runner interactively. Does not require any options.
 
@@ -1532,7 +1598,8 @@ Config Options:
  --replace              Replace any existing runner with the same name (default false)
  --pat                  GitHub personal access token with repo scope. Used for checking network connectivity when executing `.{separator}run.{ext} --check`
  --disableupdate        Disable self-hosted runner automatic update to the latest released version`
- --ephemeral            Configure the runner to only take one job and then let the service un-configure the runner after the job finishes (default false)");
+ --ephemeral            Configure the runner to only take one job and then let the service un-configure the runner after the job finishes (default false)
+ --maxconcurrentjobs    Max number of jobs to run in parallel in multi-repo mode. Precedence: CLI, env ACTIONS_RUNNER_INPUT_MAXCONCURRENTJOBS, shared .options, default 1");
 
 #if OS_WINDOWS
     _term.WriteLine($@" --runasservice   Run the runner as a service");
@@ -1549,6 +1616,8 @@ Examples:
   .{separator}config.{ext} --unattended --url <url> --token <token> --replace [--name <name>]
  Configure a runner non-interactively with three extra labels:
   .{separator}config.{ext} --unattended --url <url> --token <token> --labels L1,L2,L3");
+            _term.WriteLine($@" Save a shared default for multi-repo parallelism:");
+            _term.WriteLine($@"  .{separator}config.{ext} set --maxconcurrentjobs 3");
 #if OS_WINDOWS
     _term.WriteLine($@" Configure a runner to run as a service:");
     _term.WriteLine($@"  .{separator}config.{ext} --url <url> --token <token> --runasservice");
