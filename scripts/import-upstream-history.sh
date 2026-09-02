@@ -81,6 +81,18 @@ git -C "${worktree_dir}" -c user.name="github-actions[bot]" -c user.email="41898
     commit -m "Overlay local orchestration for ${branch}"
 
 "${worktree_dir}/scripts/apply-patches.sh" --source-dir "${worktree_dir}" --commit
-git branch -f "${target_branch}" HEAD
+final_commit=$(git -C "${worktree_dir}" rev-parse HEAD)
 
-echo "Imported ${upstream_commit} into ${target_branch}"
+if ! git -C "${worktree_dir}" merge-base --is-ancestor "${upstream_commit}" "${final_commit}"; then
+    echo "Final import commit does not descend from upstream commit ${upstream_commit}." >&2
+    exit 1
+fi
+
+git branch -f "${target_branch}" "${final_commit}"
+target_commit=$(git rev-parse "${target_branch}")
+if [[ "${target_commit}" != "${final_commit}" ]]; then
+    echo "Target branch ${target_branch} points at ${target_commit}, expected ${final_commit}." >&2
+    exit 1
+fi
+
+echo "Imported ${upstream_commit} into ${target_branch} at ${final_commit}"

@@ -60,7 +60,7 @@ jobs:
       - name: Push imported branch
         if: ${{ steps.upstream.outputs.needs_import == 'true' }}
         shell: bash
-        run: git push --force-with-lease origin "${{ steps.upstream.outputs.target_branch }}"
+        run: git push --force-with-lease origin "${{ steps.upstream.outputs.target_branch }}:${{ steps.upstream.outputs.target_branch }}"
 
       - name: Dispatch build workflow
         if: ${{ steps.upstream.outputs.needs_build == 'true' }}

@@ -51,7 +51,7 @@ jobs:
 
       - name: Push imported branch
         shell: bash
-        run: git push --force-with-lease origin "${TARGET_BRANCH}"
+        run: git push --force-with-lease origin "${TARGET_BRANCH}:${TARGET_BRANCH}"
 
       - name: Dispatch build workflow
         shell: bash
