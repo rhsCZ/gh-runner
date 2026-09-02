@@ -74,7 +74,7 @@ cd "$DIR"
 source ./env.sh
 
 shopt -s nocasematch
-if [[ "$1" == "remove" ]]; then
+if [[ "$1" == "remove" || "$1" == "list" || "$1" == "add" || "$1" == "configure" ]]; then
     ./bin/Runner.Listener "$@"
 else
     ./bin/Runner.Listener configure "$@"

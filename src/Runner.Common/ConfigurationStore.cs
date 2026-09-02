@@ -171,6 +171,9 @@ namespace GitHub.Runner.Common
         CredentialData GetMigratedCredentials();
         RunnerSettings GetSettings();
         RunnerSettings GetMigratedSettings();
+        void SetActiveRunnerSettings(RunnerSettings settings);
+        void ClearActiveRunnerSettings();
+        void Reset();
         void SaveCredential(CredentialData credential);
         void SaveMigratedCredential(CredentialData credential);
         void SaveSettings(RunnerSettings settings);
@@ -193,6 +196,7 @@ namespace GitHub.Runner.Common
         private CredentialData _migratedCreds;
         private RunnerSettings _settings;
         private RunnerSettings _migratedSettings;
+        private RunnerSettings _activeSettingsOverride;
 
         public override void Initialize(IHostContext hostContext)
         {
@@ -279,6 +283,11 @@ namespace GitHub.Runner.Common
 
         public RunnerSettings GetSettings()
         {
+            if (_activeSettingsOverride != null)
+            {
+                return _activeSettingsOverride;
+            }
+
             if (_settings == null)
             {
                 RunnerSettings configuredSettings = null;
@@ -294,6 +303,25 @@ namespace GitHub.Runner.Common
             }
 
             return _settings;
+        }
+
+        public void SetActiveRunnerSettings(RunnerSettings settings)
+        {
+            _activeSettingsOverride = settings;
+        }
+
+        public void ClearActiveRunnerSettings()
+        {
+            _activeSettingsOverride = null;
+        }
+
+        public void Reset()
+        {
+            _creds = null;
+            _migratedCreds = null;
+            _settings = null;
+            _migratedSettings = null;
+            _activeSettingsOverride = null;
         }
 
         public RunnerSettings GetMigratedSettings()

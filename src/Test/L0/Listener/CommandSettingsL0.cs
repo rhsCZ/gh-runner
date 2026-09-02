@@ -108,6 +108,18 @@ namespace GitHub.Runner.Common.Tests
         [Fact]
         [Trait("Level", "L0")]
         [Trait("Category", nameof(CommandSettings))]
+        public void GetsCommandAdd()
+        {
+            using (TestHostContext hc = CreateTestContext())
+            {
+                var command = new CommandSettings(hc, args: new string[] { "add" });
+                Assert.True(command.Add);
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", nameof(CommandSettings))]
         public void GetsCommandRun()
         {
             using (TestHostContext hc = CreateTestContext())
@@ -138,6 +150,18 @@ namespace GitHub.Runner.Common.Tests
 
                 // Assert.
                 Assert.True(actual);
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", nameof(CommandSettings))]
+        public void GetsCommandList()
+        {
+            using (TestHostContext hc = CreateTestContext())
+            {
+                var command = new CommandSettings(hc, args: new string[] { "list" });
+                Assert.True(command.List);
             }
         }
 
@@ -273,6 +297,18 @@ namespace GitHub.Runner.Common.Tests
 
                 // Assert.
                 Assert.True(actual);
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", nameof(CommandSettings))]
+        public void GetsProfileArg()
+        {
+            using (TestHostContext hc = CreateTestContext())
+            {
+                var command = new CommandSettings(hc, args: new string[] { "--profile", "repo-a" });
+                Assert.Equal("repo-a", command.GetProfileName());
             }
         }
 
