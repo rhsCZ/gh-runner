@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/actions/runner.git",
+  "branch": "releases/m337",
+  "ref": "releases/m337",
+  "commit": "397b032cbf865e9c3ddfab89d533ec19325e1273"
+}

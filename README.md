@@ -1,39 +1,53 @@
-<p align="center">
-  <img src="docs/res/github-graph.png">
-</p>
+# gh-runner
 
-# GitHub Actions Runner
+Custom orchestration repository for building a patched GitHub Actions runner.
 
-[![Actions Status](https://github.com/actions/runner/workflows/Runner%20CI/badge.svg)](https://github.com/actions/runner/actions)
+This repository keeps automation, patch files, and GitHub workflows only. It does
+not vendor the `actions/runner` source tree into `master`.
 
-The runner is the application that runs a job from a GitHub Actions workflow. It is used by GitHub Actions in the [hosted virtual environments](https://github.com/actions/virtual-environments), or you can [self-host the runner](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/about-self-hosted-runners) in your own environment.
+## Goal
 
-## Get Started
+- Import the complete upstream Git history from `actions/runner` for a selected release branch.
+- Create or update the matching local branch, for example `releases/m337`.
+- Add one local orchestration commit that removes upstream workflow files at branch HEAD and restores this repository's automation.
+- Apply local forward-port patches as separate commits on top of upstream history.
+- Build the patched runner, publish the generated packages in a GitHub Release, and push a docker image to GHCR.
 
-For more information about installing and using self-hosted runners, see [Adding self-hosted runners](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/adding-self-hosted-runners) and [Using self-hosted runners in a workflow](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/using-self-hosted-runners-in-a-workflow)
+The resulting branch history is shaped like this:
 
-Runner releases:
+```text
+actions/runner history -> upstream release HEAD -> local orchestration overlay -> patch commits
+```
 
-![win](docs/res/win_sm.png) [Pre-reqs](docs/start/envwin.md) | [Download](https://github.com/actions/runner/releases)  
+## Repository Layout
 
-![macOS](docs/res/apple_sm.png)  [Pre-reqs](docs/start/envosx.md) | [Download](https://github.com/actions/runner/releases)  
+- `.github/workflows/sync-upstream.yml` imports a selected upstream release branch and dispatches the release build workflow.
+- `.github/workflows/watch-upstream-releases.yml` runs on a schedule, checks the latest upstream runner release, imports it when needed, and dispatches a release build.
+- `.github/workflows/build-runner.yml` is dispatch-only; it builds packages, publishes them to a GitHub Release, and pushes a GHCR docker image named after this repository, such as `ghcr.io/rhscz/gh-runner`.
+- `.github/workflows/build-runner-test.yml` runs on push or manual dispatch and uploads package plus docker image artifacts without creating a GitHub Release or pushing to GHCR.
+- `scripts/import-upstream-history.sh` creates the local branch from full upstream history, overlays local automation, and commits patches.
+- `scripts/apply-patches.sh` applies the patch series with limited fuzz so small upstream context shifts can be tolerated.
+- `scripts/build-runner.sh` wraps the upstream runner build and package commands.
+- `scripts/sync-upstream.sh` is a local helper for creating an ignored working snapshot under `.work/actions-runner`.
+- `patches/` contains the custom patch series in deterministic order.
 
-![linux](docs/res/linux_sm.png)  [Pre-reqs](docs/start/envlinux.md) | [Download](https://github.com/actions/runner/releases)
+## Patch Flow
 
-### Note
+Patch order is controlled by `patches/series.txt`. The patcher uses
+`patch --forward --fuzz=3`; this lets it survive small context movement while
+still failing when a hunk cannot be applied.
 
-Thank you for your interest in this GitHub repo, however, right now we are not taking contributions. 
+The source notes for the desired behavior live outside this repository at
+`/root/gh-runner-edit-notes.md`.
 
-We continue to focus our resources on strategic areas that help our customers be successful while making developers' lives easier. While GitHub Actions remains a key part of this vision, we are allocating resources towards other areas of Actions and are not taking contributions to this repository at this time. The GitHub public roadmap is the best place to follow along for any updates on features we’re working on and what stage they’re in.
+## Release Branches
 
-We are taking the following steps to better direct requests related to GitHub Actions, including:
+The orchestration branch is expected to be `master`. Imported runner branches can
+use the same names as upstream, such as `releases/m337`.
 
-1. We will be directing questions and support requests to our [Community Discussions area](https://github.com/orgs/community/discussions/categories/actions)
+GitHub Release tags use the same format as upstream `actions/runner`, such as
+`v2.337.0`.
 
-2. High Priority bugs can be reported through Community Discussions or you can report these to our support team https://support.github.com/contact/bug-report.
-
-3. Security Issues should be handled as per our [SECURITY.md](https://github.com/actions/runner?tab=security-ov-file)
-
-We will still provide security updates for this project and fix major breaking changes during this time.
-
-You are welcome to still raise bugs in this repo.
+Upstream workflow files may exist in older imported history because they are part
+of the original `actions/runner` commits. They are removed again at the imported
+branch HEAD by the local overlay commit.
