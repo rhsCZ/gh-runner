@@ -1,0 +1,1071 @@
+# Parallel multi-repository execution and shared maxConcurrentJobs options
+# Source commit: 35d7bd10e0fedd3b8963c983d74048416d623124
+# Generated from rhsCZ/runner; upstream workflow files are intentionally excluded.
+
+diff --git a/src/Misc/layoutroot/config.cmd b/src/Misc/layoutroot/config.cmd
+--- a/src/Misc/layoutroot/config.cmd
++++ b/src/Misc/layoutroot/config.cmd
+@@ -22,6 +22,8 @@ if /i "%~1" equ "remove" (
+     "%~dp0bin\Runner.Listener.exe" %*
+ ) else if /i "%~1" equ "add" (
+     "%~dp0bin\Runner.Listener.exe" %*
++) else if /i "%~1" equ "set" (
++    "%~dp0bin\Runner.Listener.exe" %*
+ ) else if /i "%~1" equ "configure" (
+     "%~dp0bin\Runner.Listener.exe" %*
+ ) else (
+diff --git a/src/Misc/layoutroot/config.sh b/src/Misc/layoutroot/config.sh
+--- a/src/Misc/layoutroot/config.sh
++++ b/src/Misc/layoutroot/config.sh
+@@ -74,7 +74,7 @@ cd "$DIR"
+ source ./env.sh
+ 
+ shopt -s nocasematch
+-if [[ "$1" == "remove" || "$1" == "list" || "$1" == "add" || "$1" == "configure" ]]; then
++if [[ "$1" == "remove" || "$1" == "list" || "$1" == "add" || "$1" == "configure" || "$1" == "set" ]]; then
+     ./bin/Runner.Listener "$@"
+ else
+     ./bin/Runner.Listener configure "$@"
+diff --git a/src/Runner.Common/Constants.cs b/src/Runner.Common/Constants.cs
+--- a/src/Runner.Common/Constants.cs
++++ b/src/Runner.Common/Constants.cs
+@@ -96,6 +96,7 @@ public static class Args
+                 {
+                     public static readonly string Auth = "auth";
+                     public static readonly string Labels = "labels";
++                    public static readonly string MaxConcurrentJobs = "maxconcurrentjobs";
+                     public static readonly string MonitorSocketAddress = "monitorsocketaddress";
+                     public static readonly string Name = "name";
+                     public static readonly string Profile = "profile";
+@@ -127,6 +128,7 @@ public static class Commands
+                     public static readonly string List = "list";
+                     public static readonly string Remove = "remove";
+                     public static readonly string Run = "run";
++                    public static readonly string Set = "set";
+                     public static readonly string Warmup = "warmup";
+                 }
+ 
+@@ -330,6 +332,7 @@ public static class Agent
+                 public static readonly string ActionArchiveCacheDirectory = "ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE";
+                 public static readonly string SymlinkCachedActions = "ACTIONS_RUNNER_SYMLINK_CACHED_ACTIONS";
+                 public static readonly string EmitCompositeMarkers = "ACTIONS_RUNNER_EMIT_COMPOSITE_MARKERS";
++                public static readonly string ConfigDirectory = "ACTIONS_RUNNER_CONFIG_DIRECTORY";
+             }
+ 
+             public static class System
+diff --git a/src/Runner.Common/HostContext.cs b/src/Runner.Common/HostContext.cs
+--- a/src/Runner.Common/HostContext.cs
++++ b/src/Runner.Common/HostContext.cs
+@@ -444,60 +444,61 @@ public string GetDirectory(WellKnownDirectory directory)
+ 
+         public string GetConfigFile(WellKnownConfigFile configFile)
+         {
++            string configRoot = GetConfigRootDirectory();
+             string path;
+             switch (configFile)
+             {
+                 case WellKnownConfigFile.Runner:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".runner");
+                     break;
+ 
+                 case WellKnownConfigFile.MigratedRunner:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".runner_migrated");
+                     break;
+ 
+                 case WellKnownConfigFile.Credentials:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".credentials");
+                     break;
+ 
+                 case WellKnownConfigFile.MigratedCredentials:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".credentials_migrated");
+                     break;
+ 
+                 case WellKnownConfigFile.RSACredentials:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".credentials_rsaparams");
+                     break;
+ 
+                 case WellKnownConfigFile.Service:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".service");
+                     break;
+ 
+                 case WellKnownConfigFile.CredentialStore:
+ #if OS_OSX
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".credential_store.keychain");
+ #else
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".credential_store");
+ #endif
+                     break;
+ 
+                 case WellKnownConfigFile.Certificates:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".certificates");
+                     break;
+ 
+@@ -509,7 +510,7 @@ public string GetConfigFile(WellKnownConfigFile configFile)
+ 
+                 case WellKnownConfigFile.SetupInfo:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".setup_info");
+                     break;
+ 
+@@ -527,6 +528,17 @@ public string GetConfigFile(WellKnownConfigFile configFile)
+             return path;
+         }
+ 
++        private string GetConfigRootDirectory()
++        {
++            var configRoot = Environment.GetEnvironmentVariable(Constants.Variables.Agent.ConfigDirectory);
++            if (!string.IsNullOrWhiteSpace(configRoot))
++            {
++                return configRoot;
++            }
++
++            return GetDirectory(WellKnownDirectory.Root);
++        }
++
+         public Tracing GetTrace(string name)
+         {
+             return _traceManager[name];
+diff --git a/src/Runner.Common/RunnerGlobalOptions.cs b/src/Runner.Common/RunnerGlobalOptions.cs
+new file mode 100644
+--- /dev/null
++++ b/src/Runner.Common/RunnerGlobalOptions.cs
+@@ -0,0 +1,7 @@
++namespace GitHub.Runner.Common
++{
++    public sealed class RunnerGlobalOptions
++    {
++        public int? MaxConcurrentJobs { get; set; }
++    }
++}
+diff --git a/src/Runner.Listener/CommandSettings.cs b/src/Runner.Listener/CommandSettings.cs
+--- a/src/Runner.Listener/CommandSettings.cs
++++ b/src/Runner.Listener/CommandSettings.cs
+@@ -6,15 +6,19 @@
+ using System.Linq;
+ using GitHub.Runner.Common;
+ using GitHub.Runner.Sdk;
++using System.IO;
+ 
+ namespace GitHub.Runner.Listener
+ {
+     public sealed class CommandSettings
+     {
++        private readonly IHostContext _context;
+         private readonly Dictionary<string, string> _envArgs = new(StringComparer.OrdinalIgnoreCase);
+         private readonly CommandLineParser _parser;
+         private readonly IPromptManager _promptManager;
+         private readonly Tracing _trace;
++        private RunnerGlobalOptions _globalOptions;
++        private bool _globalOptionsLoaded;
+ 
+         // Valid flags for all commands
+         private readonly string[] genericOptions =
+@@ -92,8 +96,14 @@ public sealed class CommandSettings
+                 {
+                     Constants.Runner.CommandLine.Flags.Once,
+                     Constants.Runner.CommandLine.Args.JitConfig,
++                    Constants.Runner.CommandLine.Args.MaxConcurrentJobs,
+                     Constants.Runner.CommandLine.Args.StartupType
+                 },
++            [Constants.Runner.CommandLine.Commands.Set] =
++                new string[]
++                {
++                    Constants.Runner.CommandLine.Args.MaxConcurrentJobs
++                },
+             // valid warmup flags and args
+             [Constants.Runner.CommandLine.Commands.Warmup] =
+                 new string[] { }
+@@ -105,6 +115,7 @@ public sealed class CommandSettings
+         public bool Remove => TestCommand(Constants.Runner.CommandLine.Commands.Remove);
+         public bool List => TestCommand(Constants.Runner.CommandLine.Commands.List);
+         public bool Run => TestCommand(Constants.Runner.CommandLine.Commands.Run);
++        public bool Set => TestCommand(Constants.Runner.CommandLine.Commands.Set);
+         public bool Warmup => TestCommand(Constants.Runner.CommandLine.Commands.Warmup);
+ 
+         // Flags.
+@@ -126,6 +137,7 @@ public sealed class CommandSettings
+         public CommandSettings(IHostContext context, string[] args)
+         {
+             ArgUtil.NotNull(context, nameof(context));
++            _context = context;
+             _promptManager = context.GetService<IPromptManager>();
+             _trace = context.GetTrace(nameof(CommandSettings));
+ 
+@@ -216,6 +228,10 @@ public string GetCommandName()
+             {
+                 command = Constants.Runner.CommandLine.Commands.Run;
+             }
++            else if (Set)
++            {
++                command = Constants.Runner.CommandLine.Commands.Set;
++            }
+             else if (Warmup)
+             {
+                 command = Constants.Runner.CommandLine.Commands.Warmup;
+@@ -382,6 +398,34 @@ public string GetStartupType()
+             return GetArg(Constants.Runner.CommandLine.Args.StartupType);
+         }
+ 
++        public int GetMaxConcurrentJobs()
++        {
++            var value = GetArg(Constants.Runner.CommandLine.Args.MaxConcurrentJobs);
++            if (!string.IsNullOrWhiteSpace(value))
++            {
++                if (int.TryParse(value, out var parsed) && parsed > 0)
++                {
++                    return parsed;
++                }
++
++                _trace.Info($"Could not parse the argument value '{value}' for MaxConcurrentJobs. Defaulting to 1.");
++                return 1;
++            }
++
++            var configuredValue = LoadGlobalOptions().MaxConcurrentJobs;
++            if (configuredValue.HasValue && configuredValue.Value > 0)
++            {
++                return configuredValue.Value;
++            }
++
++            return 1;
++        }
++
++        public string GetMaxConcurrentJobsInput()
++        {
++            return GetArg(Constants.Runner.CommandLine.Args.MaxConcurrentJobs);
++        }
++
+         public ISet<string> GetLabels()
+         {
+             var labelSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+@@ -519,5 +563,33 @@ private bool TestFlagOrPrompt(
+ 
+             return result;
+         }
++
++        private RunnerGlobalOptions LoadGlobalOptions()
++        {
++            if (_globalOptionsLoaded)
++            {
++                return _globalOptions ?? new RunnerGlobalOptions();
++            }
++
++            _globalOptionsLoaded = true;
++            var optionsFile = _context.GetConfigFile(WellKnownConfigFile.Options);
++            if (!File.Exists(optionsFile))
++            {
++                _globalOptions = new RunnerGlobalOptions();
++                return _globalOptions;
++            }
++
++            try
++            {
++                _globalOptions = IOUtil.LoadObject<RunnerGlobalOptions>(optionsFile) ?? new RunnerGlobalOptions();
++            }
++            catch (Exception ex)
++            {
++                _trace.Warning($"Failed to load shared runner options from '{optionsFile}'. {ex.Message}");
++                _globalOptions = new RunnerGlobalOptions();
++            }
++
++            return _globalOptions;
++        }
+     }
+ }
+diff --git a/src/Runner.Listener/Configuration/ConfigurationManager.cs b/src/Runner.Listener/Configuration/ConfigurationManager.cs
+--- a/src/Runner.Listener/Configuration/ConfigurationManager.cs
++++ b/src/Runner.Listener/Configuration/ConfigurationManager.cs
+@@ -25,6 +25,7 @@ public interface IConfigurationManager : IRunnerService
+         Task ConfigureAsync(CommandSettings command);
+         Task UnconfigureAsync(CommandSettings command);
+         void ListProfiles();
++        void SetGlobalOptions(CommandSettings command);
+         void DeleteLocalRunnerConfig();
+         RunnerSettings LoadSettings();
+         RunnerSettings LoadMigratedSettings();
+@@ -719,6 +720,36 @@ public void ListProfiles()
+             }
+         }
+ 
++        public void SetGlobalOptions(CommandSettings command)
++        {
++            var rawMaxConcurrentJobs = command.GetMaxConcurrentJobsInput();
++            if (string.IsNullOrWhiteSpace(rawMaxConcurrentJobs))
++            {
++                throw new InvalidOperationException("The set command currently requires --maxconcurrentjobs <positive integer>.");
++            }
++
++            if (!int.TryParse(rawMaxConcurrentJobs, out var maxConcurrentJobs) || maxConcurrentJobs <= 0)
++            {
++                throw new InvalidOperationException("--maxconcurrentjobs must be a positive integer.");
++            }
++
++            var options = LoadGlobalOptions();
++            options.MaxConcurrentJobs = maxConcurrentJobs;
++            IOUtil.SaveObject(options, HostContext.GetConfigFile(WellKnownConfigFile.Options));
++            _term.WriteSuccessMessage($"Saved shared runner option maxConcurrentJobs={maxConcurrentJobs} to .options");
++        }
++
++        private RunnerGlobalOptions LoadGlobalOptions()
++        {
++            var optionsFile = HostContext.GetConfigFile(WellKnownConfigFile.Options);
++            if (!System.IO.File.Exists(optionsFile))
++            {
++                return new RunnerGlobalOptions();
++            }
++
++            return IOUtil.LoadObject<RunnerGlobalOptions>(optionsFile) ?? new RunnerGlobalOptions();
++        }
++
+         private ICredentialProvider GetCredentialProvider(CommandSettings command, string serverUrl)
+         {
+             Trace.Info(nameof(GetCredentialProvider));
+diff --git a/src/Runner.Listener/JobDispatcher.cs b/src/Runner.Listener/JobDispatcher.cs
+--- a/src/Runner.Listener/JobDispatcher.cs
++++ b/src/Runner.Listener/JobDispatcher.cs
+@@ -26,6 +26,7 @@ public interface IJobDispatcher : IRunnerService
+         bool Busy { get; }
+         TaskCompletionSource<TaskResult> RunOnceJobCompleted { get; }
+         void Run(Pipelines.AgentJobRequestMessage message, bool runOnce = false);
++        void Run(Pipelines.AgentJobRequestMessage message, bool runOnce, string configDirectory);
+         bool Cancel(JobCancelMessage message);
+         Task WaitAsync(CancellationToken token);
+         Task ShutdownAsync();
+@@ -87,6 +88,11 @@ public override void Initialize(IHostContext hostContext)
+         public bool Busy { get; private set; }
+ 
+         public void Run(Pipelines.AgentJobRequestMessage jobRequestMessage, bool runOnce = false)
++        {
++            Run(jobRequestMessage, runOnce, null);
++        }
++
++        public void Run(Pipelines.AgentJobRequestMessage jobRequestMessage, bool runOnce, string configDirectory)
+         {
+             Trace.Info($"Job request {jobRequestMessage.RequestId} for plan {jobRequestMessage.Plan.PlanId} job {jobRequestMessage.JobId} received.");
+ 
+@@ -126,11 +132,11 @@ public void Run(Pipelines.AgentJobRequestMessage jobRequestMessage, bool runOnce
+             if (runOnce)
+             {
+                 Trace.Info("Start dispatcher for one time used runner.");
+-                newDispatch.WorkerDispatch = RunOnceAsync(jobRequestMessage, orchestrationId, currentDispatch, newDispatch.WorkerCancellationTokenSource.Token, newDispatch.WorkerCancelTimeoutKillTokenSource.Token);
++                newDispatch.WorkerDispatch = RunOnceAsync(jobRequestMessage, orchestrationId, currentDispatch, newDispatch.WorkerCancellationTokenSource.Token, newDispatch.WorkerCancelTimeoutKillTokenSource.Token, configDirectory);
+             }
+             else
+             {
+-                newDispatch.WorkerDispatch = RunAsync(jobRequestMessage, orchestrationId, currentDispatch, newDispatch.WorkerCancellationTokenSource.Token, newDispatch.WorkerCancelTimeoutKillTokenSource.Token);
++                newDispatch.WorkerDispatch = RunAsync(jobRequestMessage, orchestrationId, currentDispatch, newDispatch.WorkerCancellationTokenSource.Token, newDispatch.WorkerCancelTimeoutKillTokenSource.Token, configDirectory);
+             }
+ 
+             _jobInfos.TryAdd(newDispatch.JobId, newDispatch);
+@@ -340,12 +346,12 @@ private async Task EnsureDispatchFinished(WorkerDispatcher jobDispatch, bool can
+             }
+         }
+ 
+-        private async Task RunOnceAsync(Pipelines.AgentJobRequestMessage message, string orchestrationId, WorkerDispatcher previousJobDispatch, CancellationToken jobRequestCancellationToken, CancellationToken workerCancelTimeoutKillToken)
++        private async Task RunOnceAsync(Pipelines.AgentJobRequestMessage message, string orchestrationId, WorkerDispatcher previousJobDispatch, CancellationToken jobRequestCancellationToken, CancellationToken workerCancelTimeoutKillToken, string configDirectory)
+         {
+             var jobResult = TaskResult.Succeeded;
+             try
+             {
+-                jobResult = await RunAsync(message, orchestrationId, previousJobDispatch, jobRequestCancellationToken, workerCancelTimeoutKillToken);
++                jobResult = await RunAsync(message, orchestrationId, previousJobDispatch, jobRequestCancellationToken, workerCancelTimeoutKillToken, configDirectory);
+             }
+             finally
+             {
+@@ -354,7 +360,7 @@ private async Task RunOnceAsync(Pipelines.AgentJobRequestMessage message, string
+             }
+         }
+ 
+-        private async Task<TaskResult> RunAsync(Pipelines.AgentJobRequestMessage message, string orchestrationId, WorkerDispatcher previousJobDispatch, CancellationToken jobRequestCancellationToken, CancellationToken workerCancelTimeoutKillToken)
++        private async Task<TaskResult> RunAsync(Pipelines.AgentJobRequestMessage message, string orchestrationId, WorkerDispatcher previousJobDispatch, CancellationToken jobRequestCancellationToken, CancellationToken workerCancelTimeoutKillToken, string configDirectory)
+         {
+             Busy = true;
+             try
+@@ -474,11 +480,20 @@ private async Task<TaskResult> RunAsync(Pipelines.AgentJobRequestMessage message
+                                 HostContext.WritePerfCounter("StartingWorkerProcess");
+                                 var assemblyDirectory = HostContext.GetDirectory(WellKnownDirectory.Bin);
+                                 string workerFileName = Path.Combine(assemblyDirectory, _workerProcessName);
++                                Dictionary<string, string> workerEnvironment = null;
++                                if (!string.IsNullOrWhiteSpace(configDirectory))
++                                {
++                                    workerEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
++                                    {
++                                        [Constants.Variables.Agent.ConfigDirectory] = configDirectory,
++                                    };
++                                }
++
+                                 workerProcessTask = processInvoker.ExecuteAsync(
+                                     workingDirectory: assemblyDirectory,
+                                     fileName: workerFileName,
+                                     arguments: "spawnclient " + pipeHandleOut + " " + pipeHandleIn,
+-                                    environment: null,
++                                    environment: workerEnvironment,
+                                     requireExitCodeZero: false,
+                                     outputEncoding: null,
+                                     killProcessOnCancel: true,
+diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
+--- a/src/Runner.Listener/Runner.cs
++++ b/src/Runner.Listener/Runner.cs
+@@ -180,6 +180,21 @@ public async Task<int> ExecuteCommand(CommandSettings command)
+                     }
+                 }
+ 
++                if (command.Set)
++                {
++                    try
++                    {
++                        configManager.SetGlobalOptions(command);
++                        return Constants.Runner.ReturnCode.Success;
++                    }
++                    catch (Exception ex)
++                    {
++                        Trace.Error(ex);
++                        _term.WriteError(ex.Message);
++                        return Constants.Runner.ReturnCode.TerminatedError;
++                    }
++                }
++
+                 // remove config files, remove service, and exit
+                 if (command.Remove)
+                 {
+@@ -351,7 +366,7 @@ public async Task<int> ExecuteCommand(CommandSettings command)
+                     // Run the runner interactively or as service
+                     if (useMultiProfileMode)
+                     {
+-                        return await ExecuteMultiRepoRunnerAsync(profileDirectoryProfiles);
++                        return await ExecuteMultiRepoRunnerAsync(profileDirectoryProfiles, command.GetMaxConcurrentJobs());
+                     }
+ 
+                     return await ExecuteRunnerAsync(settings, command.RunOnce || settings.Ephemeral || returnJobResultForHosted, returnJobResultForHosted);
+@@ -947,7 +962,7 @@ private async Task<int> ExecuteRunnerAsync(RunnerSettings settings, bool runOnce
+             return returnCode;
+         }
+ 
+-        private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile> profiles)
++        private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile> profiles, int maxConcurrentJobs)
+         {
+             if (profiles.Any(x => !x.Settings.UseV2Flow))
+             {
+@@ -991,10 +1006,11 @@ private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile>
+             }
+ 
+             _term.WriteLine($"Current runner version: '{BuildConstants.RunnerPackage.Version}'");
+-            _term.WriteLine($"{DateTime.UtcNow:u}: Listening for Jobs across {listenerContexts.Count} repositories");
++            var effectiveMaxConcurrentJobs = Math.Max(1, Math.Min(maxConcurrentJobs, listenerContexts.Count));
++            _term.WriteLine($"{DateTime.UtcNow:u}: Listening for Jobs across {listenerContexts.Count} repositories (max parallel jobs: {effectiveMaxConcurrentJobs})");
+ 
+             var pendingScheduler = new MultiRepoPendingScheduler();
+-            IJobDispatcher activeDispatcher = null;
++            var activeDispatchers = new List<ActiveMultiRepoDispatch>();
+             bool shuttingDown = false;
+             try
+             {
+@@ -1005,22 +1021,20 @@ private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile>
+ 
+                 while (!HostContext.RunnerShutdownToken.IsCancellationRequested)
+                 {
+-                    if (activeDispatcher != null && !activeDispatcher.Busy)
++                    await DrainCompletedMultiRepoDispatchersAsync(activeDispatchers, listenerContexts);
++
++                    if (activeDispatchers.Count < effectiveMaxConcurrentJobs && pendingScheduler.TryDequeue(out var pendingContext))
+                     {
+-                        await activeDispatcher.WaitAsync(CancellationToken.None);
+-                        foreach (var context in listenerContexts)
++                        var activeDispatcher = await TryDispatchNextJobForProfileAsync(pendingContext, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
++                        if (activeDispatcher != null)
+                         {
+-                            activeDispatcher.JobStatus -= context.Listener.OnJobStatus;
++                            activeDispatchers.Add(activeDispatcher);
++                            if (activeDispatchers.Count == 1)
++                            {
++                                BroadcastMultiRepoJobStatus(listenerContexts, TaskAgentStatus.Busy);
++                            }
+                         }
+ 
+-                        await activeDispatcher.ShutdownAsync();
+-                        activeDispatcher = null;
+-                        configurationStore.ClearActiveRunnerSettings();
+-                    }
+-
+-                    if (activeDispatcher == null && pendingScheduler.TryDequeue(out var pendingContext))
+-                    {
+-                        activeDispatcher = await TryDispatchNextJobForProfileAsync(pendingContext, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
+                         if (pendingContext.PollTask == null)
+                         {
+                             pendingContext.PollTask = pendingContext.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
+@@ -1079,10 +1093,18 @@ private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile>
+                         message,
+                         listenerContexts,
+                         pendingScheduler,
+-                        activeDispatcher,
++                        activeDispatchers,
++                        effectiveMaxConcurrentJobs,
+                         configurationStore);
+ 
+-                    activeDispatcher ??= messageResult.Dispatcher;
++                    if (messageResult.Dispatcher != null)
++                    {
++                        activeDispatchers.Add(messageResult.Dispatcher);
++                        if (activeDispatchers.Count == 1)
++                        {
++                            BroadcastMultiRepoJobStatus(listenerContexts, TaskAgentStatus.Busy);
++                        }
++                    }
+ 
+                     if (messageResult.ContinuePolling && completedContext.PollTask == null && !completedContext.PendingWork)
+                     {
+@@ -1096,14 +1118,9 @@ private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile>
+             }
+             finally
+             {
+-                if (activeDispatcher != null)
++                foreach (var activeDispatcher in activeDispatchers)
+                 {
+-                    foreach (var context in listenerContexts)
+-                    {
+-                        activeDispatcher.JobStatus -= context.Listener.OnJobStatus;
+-                    }
+-
+-                    await activeDispatcher.ShutdownAsync();
++                    await activeDispatcher.Dispatcher.ShutdownAsync();
+                 }
+ 
+                 configurationStore.ClearActiveRunnerSettings();
+@@ -1126,19 +1143,20 @@ private IMessageListener CreateMultiRepoListener(RunnerProfile profile)
+             return listener;
+         }
+ 
+-        private async Task<(bool ContinuePolling, IJobDispatcher Dispatcher)> HandleMultiRepoMessageAsync(
++        private async Task<(bool ContinuePolling, ActiveMultiRepoDispatch Dispatcher)> HandleMultiRepoMessageAsync(
+             RepositoryListenerContext context,
+             TaskAgentMessage message,
+             IReadOnlyList<RepositoryListenerContext> listenerContexts,
+             MultiRepoPendingScheduler pendingScheduler,
+-            IJobDispatcher activeDispatcher,
++            IReadOnlyList<ActiveMultiRepoDispatch> activeDispatchers,
++            int maxConcurrentJobs,
+             IConfigurationStore configurationStore)
+         {
+             HostContext.WritePerfCounter($"MessageReceived_{message.MessageType}_{context.Profile.Name}");
+ 
+             if (MessageUtil.IsRunServiceJob(message.MessageType))
+             {
+-                if (activeDispatcher == null)
++                if (activeDispatchers.Count < maxConcurrentJobs)
+                 {
+                     var dispatched = await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
+                     return (dispatched == null, dispatched);
+@@ -1154,10 +1172,16 @@ private IMessageListener CreateMultiRepoListener(RunnerProfile profile)
+ 
+             if (string.Equals(message.MessageType, JobCancelMessage.MessageType, StringComparison.OrdinalIgnoreCase))
+             {
+-                if (activeDispatcher != null)
++                if (activeDispatchers.Count > 0)
+                 {
+                     var cancelJobMessage = JsonUtility.FromString<JobCancelMessage>(message.Body);
+-                    activeDispatcher.Cancel(cancelJobMessage);
++                    foreach (var activeDispatcher in activeDispatchers)
++                    {
++                        if (activeDispatcher.Dispatcher.Cancel(cancelJobMessage))
++                        {
++                            break;
++                        }
++                    }
+                 }
+ 
+                 return (true, null);
+@@ -1186,7 +1210,7 @@ private IMessageListener CreateMultiRepoListener(RunnerProfile profile)
+             return (true, null);
+         }
+ 
+-        private async Task<IJobDispatcher> TryDispatchNextJobForProfileAsync(
++        private async Task<ActiveMultiRepoDispatch> TryDispatchNextJobForProfileAsync(
+             RepositoryListenerContext context,
+             IReadOnlyList<RepositoryListenerContext> listenerContexts,
+             IConfigurationStore configurationStore,
+@@ -1207,18 +1231,25 @@ await HandleMultiRepoMessageAsync(
+                         message,
+                         listenerContexts,
+                         new MultiRepoPendingScheduler(),
+-                        null,
++                        Array.Empty<ActiveMultiRepoDispatch>(),
++                        1,
+                         configurationStore);
+                     continue;
+                 }
+ 
+-                return await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, cancellationToken);
++                var activeDispatcher = await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, cancellationToken);
++                if (activeDispatcher == null)
++                {
++                    continue;
++                }
++
++                return activeDispatcher;
+             }
+ 
+             return null;
+         }
+ 
+-        private async Task<IJobDispatcher> TryDispatchBrokerMessageAsync(
++        private async Task<ActiveMultiRepoDispatch> TryDispatchBrokerMessageAsync(
+             RepositoryListenerContext context,
+             TaskAgentMessage message,
+             IReadOnlyList<RepositoryListenerContext> listenerContexts,
+@@ -1249,15 +1280,49 @@ private async Task<IJobDispatcher> TryDispatchBrokerMessageAsync(
+             configurationStore.SetActiveRunnerSettings(context.Profile.Settings);
+ 
+             var jobDispatcher = HostContext.CreateService<IJobDispatcher>();
+-            foreach (var listenerContext in listenerContexts)
++            configurationStore.ClearActiveRunnerSettings();
++
++            jobDispatcher.Run(jobRequestMessage, false, context.Profile.RootPath);
++            return new ActiveMultiRepoDispatch(context, jobDispatcher);
++        }
++
++        private async Task DrainCompletedMultiRepoDispatchersAsync(
++            List<ActiveMultiRepoDispatch> activeDispatchers,
++            IReadOnlyList<RepositoryListenerContext> listenerContexts)
++        {
++            var hadActiveDispatchers = activeDispatchers.Count > 0;
++            for (var index = activeDispatchers.Count - 1; index >= 0; index--)
+             {
+-                jobDispatcher.JobStatus += listenerContext.Listener.OnJobStatus;
++                var activeDispatcher = activeDispatchers[index];
++                if (activeDispatcher.Dispatcher.Busy)
++                {
++                    continue;
++                }
++
++                await activeDispatcher.Dispatcher.WaitAsync(CancellationToken.None);
++                await activeDispatcher.Dispatcher.ShutdownAsync();
++                activeDispatchers.RemoveAt(index);
+             }
+ 
+-            jobDispatcher.Run(jobRequestMessage, false);
+-            return jobDispatcher;
++            if (hadActiveDispatchers && activeDispatchers.Count == 0)
++            {
++                BroadcastMultiRepoJobStatus(listenerContexts, TaskAgentStatus.Online);
++            }
+         }
+ 
++        private static void BroadcastMultiRepoJobStatus(
++            IReadOnlyList<RepositoryListenerContext> listenerContexts,
++            TaskAgentStatus status)
++        {
++            var jobStatus = new JobStatusEventArgs(status);
++            foreach (var context in listenerContexts)
++            {
++                context.Listener.OnJobStatus(null, jobStatus);
++            }
++        }
++
++        private sealed record ActiveMultiRepoDispatch(RepositoryListenerContext Context, IJobDispatcher Dispatcher);
++
+         private async Task<Pipelines.AgentJobRequestMessage> AcquireJobMessageAsync(
+             RunnerProfile profile,
+             RunnerJobRequestRef messageRef,
+@@ -1510,6 +1575,7 @@ private void PrintUsage(CommandSettings command)
+             _term.WriteLine($@"
+ Commands:
+  .{separator}config.{ext}         Configures the runner
++ .{separator}config.{ext} set     Saves shared runner defaults into root .options
+  .{separator}config.{ext} remove  Unconfigures the runner
+  .{separator}run.{ext}            Runs the runner interactively. Does not require any options.
+ 
+@@ -1532,7 +1598,8 @@ private void PrintUsage(CommandSettings command)
+  --replace              Replace any existing runner with the same name (default false)
+  --pat                  GitHub personal access token with repo scope. Used for checking network connectivity when executing `.{separator}run.{ext} --check`
+  --disableupdate        Disable self-hosted runner automatic update to the latest released version`
+- --ephemeral            Configure the runner to only take one job and then let the service un-configure the runner after the job finishes (default false)");
++ --ephemeral            Configure the runner to only take one job and then let the service un-configure the runner after the job finishes (default false)
++ --maxconcurrentjobs    Max number of jobs to run in parallel in multi-repo mode. Precedence: CLI, env ACTIONS_RUNNER_INPUT_MAXCONCURRENTJOBS, shared .options, default 1");
+ 
+ #if OS_WINDOWS
+     _term.WriteLine($@" --runasservice   Run the runner as a service");
+@@ -1549,6 +1616,8 @@ private void PrintUsage(CommandSettings command)
+   .{separator}config.{ext} --unattended --url <url> --token <token> --replace [--name <name>]
+  Configure a runner non-interactively with three extra labels:
+   .{separator}config.{ext} --unattended --url <url> --token <token> --labels L1,L2,L3");
++            _term.WriteLine($@" Save a shared default for multi-repo parallelism:");
++            _term.WriteLine($@"  .{separator}config.{ext} set --maxconcurrentjobs 3");
+ #if OS_WINDOWS
+     _term.WriteLine($@" Configure a runner to run as a service:");
+     _term.WriteLine($@"  .{separator}config.{ext} --url <url> --token <token> --runasservice");
+diff --git a/src/Runner.Worker/Container/DockerCommandManager.cs b/src/Runner.Worker/Container/DockerCommandManager.cs
+--- a/src/Runner.Worker/Container/DockerCommandManager.cs
++++ b/src/Runner.Worker/Container/DockerCommandManager.cs
+@@ -47,7 +47,7 @@ public override void Initialize(IHostContext hostContext)
+         {
+             base.Initialize(hostContext);
+             DockerPath = WhichUtil.Which("docker", true, Trace);
+-            string path = Path.Combine(HostContext.GetDirectory(WellKnownDirectory.Root), ".runner");
++            string path = HostContext.GetConfigFile(WellKnownConfigFile.Runner);
+             string json = File.ReadAllText(path, Encoding.UTF8);
+             DockerInstanceLabel = IOUtil.GetSha256Hash(json).Substring(0, 6);
+         }
+diff --git a/src/Test/L0/Listener/CommandSettingsL0.cs b/src/Test/L0/Listener/CommandSettingsL0.cs
+--- a/src/Test/L0/Listener/CommandSettingsL0.cs
++++ b/src/Test/L0/Listener/CommandSettingsL0.cs
+@@ -2,6 +2,7 @@
+ using GitHub.Runner.Listener.Configuration;
+ using Moq;
+ using System;
++using System.IO;
+ using System.Runtime.CompilerServices;
+ using Xunit;
+ 
+@@ -312,6 +313,82 @@ public void GetsProfileArg()
+             }
+         }
+ 
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", nameof(CommandSettings))]
++        public void GetsMaxConcurrentJobsArg()
++        {
++            using (TestHostContext hc = CreateTestContext())
++            {
++                var command = new CommandSettings(hc, args: new string[] { "run", "--maxconcurrentjobs", "3" });
++                Assert.Equal(3, command.GetMaxConcurrentJobs());
++            }
++        }
++
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", nameof(CommandSettings))]
++        public void GetsMaxConcurrentJobsArg_DefaultsWhenInvalid()
++        {
++            using (TestHostContext hc = CreateTestContext())
++            {
++                var command = new CommandSettings(hc, args: new string[] { "run", "--maxconcurrentjobs", "bad arg value" });
++                Assert.Equal(1, command.GetMaxConcurrentJobs());
++            }
++        }
++
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", nameof(CommandSettings))]
++        public void GetsMaxConcurrentJobsFromEnvVar()
++        {
++            using (TestHostContext hc = CreateTestContext())
++            {
++                try
++                {
++                    Environment.SetEnvironmentVariable("ACTIONS_RUNNER_INPUT_MAXCONCURRENTJOBS", "4");
++                    var command = new CommandSettings(hc, args: Array.Empty<string>());
++                    Assert.Equal(4, command.GetMaxConcurrentJobs());
++                }
++                finally
++                {
++                    Environment.SetEnvironmentVariable("ACTIONS_RUNNER_INPUT_MAXCONCURRENTJOBS", null);
++                }
++            }
++        }
++
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", nameof(CommandSettings))]
++        public void GetsMaxConcurrentJobsFromSharedConfig()
++        {
++            using (TestHostContext hc = CreateTestContext())
++            {
++                var optionsPath = hc.GetConfigFile(WellKnownConfigFile.Options);
++                Directory.CreateDirectory(Path.GetDirectoryName(optionsPath));
++                File.WriteAllText(optionsPath, "{\"MaxConcurrentJobs\":5}");
++
++                var command = new CommandSettings(hc, args: new string[] { "run" });
++                Assert.Equal(5, command.GetMaxConcurrentJobs());
++            }
++        }
++
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", nameof(CommandSettings))]
++        public void GetsMaxConcurrentJobsArgOverridesSharedConfig()
++        {
++            using (TestHostContext hc = CreateTestContext())
++            {
++                var optionsPath = hc.GetConfigFile(WellKnownConfigFile.Options);
++                Directory.CreateDirectory(Path.GetDirectoryName(optionsPath));
++                File.WriteAllText(optionsPath, "{\"MaxConcurrentJobs\":5}");
++
++                var command = new CommandSettings(hc, args: new string[] { "run", "--maxconcurrentjobs", "2" });
++                Assert.Equal(2, command.GetMaxConcurrentJobs());
++            }
++        }
++
+         [Fact]
+         [Trait("Level", "L0")]
+         [Trait("Category", nameof(CommandSettings))]
+@@ -899,6 +976,7 @@ public void ValidateGoodFlagCommandCombination(string validCommand, string flag)
+         [InlineData("configure", "work", "good arg value")]
+         [InlineData("remove", "token", "good arg value")]
+         [InlineData("remove", "pat", "good arg value")]
++        [InlineData("run", "maxconcurrentjobs", "3")]
+         [InlineData("run", "startuptype", "good arg value")]
+         [Trait("Level", "L0")]
+         [Trait("Category", nameof(CommandSettings))]
+diff --git a/src/Test/L0/Listener/Configuration/ConfigurationManagerL0.cs b/src/Test/L0/Listener/Configuration/ConfigurationManagerL0.cs
+--- a/src/Test/L0/Listener/Configuration/ConfigurationManagerL0.cs
++++ b/src/Test/L0/Listener/Configuration/ConfigurationManagerL0.cs
+@@ -2,10 +2,12 @@
+ using GitHub.Runner.Listener;
+ using GitHub.Runner.Listener.Configuration;
+ using GitHub.Runner.Common.Util;
++using GitHub.Runner.Sdk;
+ using GitHub.Services.WebApi;
+ using Moq;
+ using System;
+ using System.Collections.Generic;
++using System.IO;
+ using System.Linq;
+ using System.Runtime.CompilerServices;
+ using System.Security.Cryptography;
+@@ -447,5 +449,32 @@ public async Task ConfigureRunnerServiceFailsOnUnsupportedPlatforms()
+             }
+         }
+ #endif
++
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", "ConfigurationManagement")]
++        public void SetGlobalOptions_SavesMaxConcurrentJobs()
++        {
++            using (TestHostContext tc = CreateTestContext())
++            {
++                IConfigurationManager configManager = new ConfigurationManager();
++                configManager.Initialize(tc);
++
++                var command = new CommandSettings(
++                    tc,
++                    new[]
++                    {
++                        "set",
++                        "--maxconcurrentjobs", "7",
++                    });
++
++                configManager.SetGlobalOptions(command);
++
++                var optionsPath = tc.GetConfigFile(WellKnownConfigFile.Options);
++                Assert.True(File.Exists(optionsPath));
++                var saved = IOUtil.LoadObject<RunnerGlobalOptions>(optionsPath, required: true);
++                Assert.Equal(7, saved.MaxConcurrentJobs);
++            }
++        }
+     }
+ }
+diff --git a/src/Test/L0/Listener/JobDispatcherL0.cs b/src/Test/L0/Listener/JobDispatcherL0.cs
+--- a/src/Test/L0/Listener/JobDispatcherL0.cs
++++ b/src/Test/L0/Listener/JobDispatcherL0.cs
+@@ -23,6 +23,7 @@ public sealed class JobDispatcherL0
+         private Mock<IProcessChannel> _processChannel;
+         private Mock<IProcessInvoker> _processInvoker;
+         private Mock<IRunnerServer> _runnerServer;
++        private Mock<IJobNotification> _jobNotification;
+ 
+         private Mock<IRunServer> _runServer;
+         private Mock<IConfigurationStore> _configurationStore;
+@@ -32,6 +33,7 @@ public JobDispatcherL0()
+             _processChannel = new Mock<IProcessChannel>();
+             _processInvoker = new Mock<IProcessInvoker>();
+             _runnerServer = new Mock<IRunnerServer>();
++            _jobNotification = new Mock<IJobNotification>();
+             _runServer = new Mock<IRunServer>();
+             _configurationStore = new Mock<IConfigurationStore>();
+         }
+@@ -60,6 +62,7 @@ public async void DispatchesJobRequest(string billingOwnerId)
+                 var jobDispatcher = new JobDispatcher();
+                 hc.SetSingleton<IConfigurationStore>(_configurationStore.Object);
+                 hc.SetSingleton<IRunnerServer>(_runnerServer.Object);
++                hc.SetSingleton<IJobNotification>(_jobNotification.Object);
+ 
+                 hc.EnqueueInstance<IProcessChannel>(_processChannel.Object);
+                 hc.EnqueueInstance<IProcessInvoker>(_processInvoker.Object);
+@@ -99,6 +102,68 @@ public async void DispatchesJobRequest(string billingOwnerId)
+             }
+         }
+ 
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", "Runner")]
++        public async Task DispatchesJobRequestWithConfigDirectoryOverride()
++        {
++            using (var hc = new TestHostContext(this))
++            {
++                var jobDispatcher = new JobDispatcher();
++                hc.SetSingleton<IConfigurationStore>(_configurationStore.Object);
++                hc.SetSingleton<IRunnerServer>(_runnerServer.Object);
++                hc.SetSingleton<IJobNotification>(_jobNotification.Object);
++
++                hc.EnqueueInstance<IProcessChannel>(_processChannel.Object);
++                hc.EnqueueInstance<IProcessInvoker>(_processInvoker.Object);
++
++                _configurationStore.Setup(x => x.GetSettings()).Returns(new RunnerSettings() { PoolId = 1 });
++                jobDispatcher.Initialize(hc);
++
++                Pipelines.AgentJobRequestMessage message = CreateJobRequestMessage();
++                string strMessage = JsonUtility.ToString(message);
++                IDictionary<string, string> capturedEnvironment = null;
++
++                _processInvoker.Setup(x => x.ExecuteAsync(
++                        It.IsAny<String>(),
++                        It.IsAny<String>(),
++                        It.IsAny<String>(),
++                        It.IsAny<IDictionary<string, string>>(),
++                        It.IsAny<bool>(),
++                        It.IsAny<System.Text.Encoding>(),
++                        It.IsAny<bool>(),
++                        It.IsAny<System.Threading.Channels.Channel<string>>(),
++                        It.IsAny<bool>(),
++                        It.IsAny<bool>(),
++                        It.IsAny<bool>(),
++                        It.IsAny<CancellationToken>()))
++                    .Callback<string, string, string, IDictionary<string, string>, bool, System.Text.Encoding, bool, System.Threading.Channels.Channel<string>, bool, bool, bool, CancellationToken>((_, _, _, environment, _, _, _, _, _, _, _, _) =>
++                    {
++                        capturedEnvironment = environment;
++                    })
++                    .Returns(Task.FromResult<int>(56));
++
++                _processChannel.Setup(x => x.StartServer(It.IsAny<StartProcessDelegate>()))
++                    .Callback((StartProcessDelegate startDel) => { startDel("1", "2"); });
++                _processChannel.Setup(x => x.SendAsync(MessageType.NewJobRequest, It.Is<string>(s => s.Equals(strMessage)), It.IsAny<CancellationToken>()))
++                    .Returns(Task.CompletedTask);
++
++                var request = new TaskAgentJobRequest();
++                PropertyInfo sessionIdProperty = request.GetType().GetProperty("LockedUntil", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
++                Assert.NotNull(sessionIdProperty);
++                sessionIdProperty.SetValue(request, DateTime.UtcNow.AddMinutes(5));
++
++                _runnerServer.Setup(x => x.RenewAgentRequestAsync(It.IsAny<int>(), It.IsAny<long>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.FromResult<TaskAgentJobRequest>(request));
++                _runnerServer.Setup(x => x.FinishAgentRequestAsync(It.IsAny<int>(), It.IsAny<long>(), It.IsAny<Guid>(), It.IsAny<DateTime>(), It.IsAny<TaskResult>(), It.IsAny<CancellationToken>())).Returns(Task.FromResult<TaskAgentJobRequest>(new TaskAgentJobRequest()));
++
++                jobDispatcher.Run(message, false, "/tmp/profile-a");
++                await jobDispatcher.WaitAsync(CancellationToken.None);
++
++                Assert.NotNull(capturedEnvironment);
++                Assert.Equal("/tmp/profile-a", capturedEnvironment[Constants.Variables.Agent.ConfigDirectory]);
++            }
++        }
++
+         [Fact]
+         [Trait("Level", "L0")]
+         [Trait("Category", "Runner")]
+diff --git a/src/Test/L0/TestHostContext.cs b/src/Test/L0/TestHostContext.cs
+--- a/src/Test/L0/TestHostContext.cs
++++ b/src/Test/L0/TestHostContext.cs
+@@ -249,60 +249,66 @@ public string GetDirectory(WellKnownDirectory directory)
+ 
+         public string GetConfigFile(WellKnownConfigFile configFile)
+         {
++            string configRoot = Environment.GetEnvironmentVariable(Constants.Variables.Agent.ConfigDirectory);
++            if (string.IsNullOrWhiteSpace(configRoot))
++            {
++                configRoot = GetDirectory(WellKnownDirectory.Root);
++            }
++
+             string path;
+             switch (configFile)
+             {
+                 case WellKnownConfigFile.Runner:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".agent");
+                     break;
+ 
+                 case WellKnownConfigFile.MigratedRunner:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".agent_migrated");
+                     break;
+ 
+                 case WellKnownConfigFile.Credentials:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".credentials");
+                     break;
+ 
+                 case WellKnownConfigFile.MigratedCredentials:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".credentials_migrated");
+                     break;
+ 
+                 case WellKnownConfigFile.RSACredentials:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".credentials_rsaparams");
+                     break;
+ 
+                 case WellKnownConfigFile.Service:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".service");
+                     break;
+ 
+                 case WellKnownConfigFile.CredentialStore:
+ #if OS_OSX
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".credential_store.keychain");
+ #else
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".credential_store");
+ #endif
+                     break;
+ 
+                 case WellKnownConfigFile.Certificates:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".certificates");
+                     break;
+ 
+@@ -314,7 +320,7 @@ public string GetConfigFile(WellKnownConfigFile configFile)
+ 
+                 case WellKnownConfigFile.SetupInfo:
+                     path = Path.Combine(
+-                        GetDirectory(WellKnownDirectory.Root),
++                        configRoot,
+                         ".setup_info");
+                     break;
+ 
+

@@ -1,0 +1,70 @@
+name: Watch Upstream Runner Releases
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional upstream release tag, for example v2.337.0
+        required: false
+        default: ""
+      target_branch:
+        description: Optional local target branch override
+        required: false
+        default: ""
+
+concurrency:
+  group: watch-upstream-releases
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Checkout orchestration branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Check upstream release state
+        id: upstream
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || '' }}
+          TARGET_BRANCH: ${{ github.event.inputs.target_branch || '' }}
+        run: |
+          scripts/watch-upstream-releases.sh \
+            --release-tag "${RELEASE_TAG}" \
+            --target-branch "${TARGET_BRANCH}"
+
+      - name: Import source history and apply local commits
+        if: ${{ steps.upstream.outputs.needs_import == 'true' }}
+        shell: bash
+        run: |
+          scripts/import-upstream-history.sh \
+            --branch "${{ steps.upstream.outputs.upstream_branch }}" \
+            --target-branch "${{ steps.upstream.outputs.target_branch }}" \
+            --control-ref main
+
+      - name: Push imported branch
+        if: ${{ steps.upstream.outputs.needs_import == 'true' }}
+        shell: bash
+        run: git push --force-with-lease origin "${{ steps.upstream.outputs.target_branch }}"
+
+      - name: Dispatch build workflow
+        if: ${{ steps.upstream.outputs.needs_build == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-runner.yml --ref "${{ steps.upstream.outputs.target_branch }}"

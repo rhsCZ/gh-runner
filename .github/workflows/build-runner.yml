@@ -1,0 +1,110 @@
+name: Build Runner
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "releases/**"
+    paths:
+      - "src/**"
+      - "releaseVersion"
+      - "runnerversion"
+      - "patches/**"
+      - "scripts/**"
+      - ".github/workflows/build-runner.yml"
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: linux-x64
+            os: ubuntu-latest
+            shell: bash
+          - runtime: linux-arm64
+            os: ubuntu-latest
+            shell: bash
+          - runtime: linux-arm
+            os: ubuntu-latest
+            shell: bash
+          - runtime: osx-x64
+            os: macos-latest
+            shell: bash
+          - runtime: osx-arm64
+            os: macos-latest
+            shell: bash
+          - runtime: win-x64
+            os: windows-latest
+            shell: bash
+          - runtime: win-arm64
+            os: windows-latest
+            shell: bash
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate runner source exists
+        shell: bash
+        run: |
+          test -f src/ActionsRunner.sln
+
+      - name: Build and package runner
+        shell: ${{ matrix.shell }}
+        run: |
+          scripts/build-runner.sh --source-dir "$PWD" --runtime "${{ matrix.runtime }}" --configuration Release --package
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-packages-${{ matrix.runtime }}
+          path: _package/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: ${{ needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: runner-packages-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          version=$(tr -d '[:space:]' < releaseVersion)
+          if [[ -z "${version}" ]]; then
+            echo "releaseVersion is empty." >&2
+            exit 1
+          fi
+
+          branch_slug=$(printf '%s' "${GITHUB_REF_NAME}" | tr '[:upper:]/' '[:lower:]-' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+|-+$//g')
+          release_tag="runner-v${version}-${branch_slug}"
+          release_title="Runner v${version} (${GITHUB_REF_NAME})"
+
+          if ! gh release view "${release_tag}" >/dev/null 2>&1; then
+            gh release create "${release_tag}" \
+              --target "${GITHUB_SHA}" \
+              --title "${release_title}" \
+              --notes "Patched GitHub Actions runner built from ${GITHUB_REF_NAME} at ${GITHUB_SHA}." \
+              --latest=false
+          fi
+
+          gh release upload "${release_tag}" release-assets/* --clobber

@@ -1,0 +1,60 @@
+name: Import Upstream Runner History
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_branch:
+        description: Upstream release branch to import
+        required: true
+      upstream_ref:
+        description: Optional upstream commit or tag
+        required: false
+        default: ""
+      target_branch:
+        description: Optional local branch; defaults to the upstream branch
+        required: false
+        default: ""
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Checkout orchestration branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Import source history and apply local commits
+        shell: bash
+        run: |
+          target_branch="${{ inputs.target_branch }}"
+          if [[ -z "${target_branch}" ]]; then
+            target_branch="${{ inputs.upstream_branch }}"
+          fi
+
+          scripts/import-upstream-history.sh \
+            --branch "${{ inputs.upstream_branch }}" \
+            --ref "${{ inputs.upstream_ref }}" \
+            --target-branch "${target_branch}" \
+            --control-ref main
+
+          printf 'TARGET_BRANCH=%s\n' "${target_branch}" >> "${GITHUB_ENV}"
+
+      - name: Push imported branch
+        shell: bash
+        run: git push --force-with-lease origin "${TARGET_BRANCH}"
+
+      - name: Dispatch build workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-runner.yml --ref "${TARGET_BRANCH}"

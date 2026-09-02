@@ -1,0 +1,5 @@
+# One patch path per line, relative to patches/
+# 0001 includes multi-repo core plus the two Windows overwrite fixes.
+# 0002 contains the later parallel-execution and shared .options port.
+0001-multi-repo-core-and-windows-fixes.patch
+0002-parallel-multi-repo-and-shared-options.patch
