@@ -23,6 +23,7 @@ namespace GitHub.Runner.Common.Tests.Listener
         private Mock<IProcessChannel> _processChannel;
         private Mock<IProcessInvoker> _processInvoker;
         private Mock<IRunnerServer> _runnerServer;
+        private Mock<IJobNotification> _jobNotification;
 
         private Mock<IRunServer> _runServer;
         private Mock<IConfigurationStore> _configurationStore;
@@ -32,6 +33,7 @@ namespace GitHub.Runner.Common.Tests.Listener
             _processChannel = new Mock<IProcessChannel>();
             _processInvoker = new Mock<IProcessInvoker>();
             _runnerServer = new Mock<IRunnerServer>();
+            _jobNotification = new Mock<IJobNotification>();
             _runServer = new Mock<IRunServer>();
             _configurationStore = new Mock<IConfigurationStore>();
         }
@@ -60,6 +62,7 @@ namespace GitHub.Runner.Common.Tests.Listener
                 var jobDispatcher = new JobDispatcher();
                 hc.SetSingleton<IConfigurationStore>(_configurationStore.Object);
                 hc.SetSingleton<IRunnerServer>(_runnerServer.Object);
+                hc.SetSingleton<IJobNotification>(_jobNotification.Object);
 
                 hc.EnqueueInstance<IProcessChannel>(_processChannel.Object);
                 hc.EnqueueInstance<IProcessInvoker>(_processInvoker.Object);
@@ -96,6 +99,68 @@ namespace GitHub.Runner.Common.Tests.Listener
                 await jobDispatcher.WaitAsync(CancellationToken.None);
 
                 Assert.False(jobDispatcher.RunOnceJobCompleted.Task.IsCompleted, "JobDispatcher should not set task complete token for regular agent.");
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Runner")]
+        public async Task DispatchesJobRequestWithConfigDirectoryOverride()
+        {
+            using (var hc = new TestHostContext(this))
+            {
+                var jobDispatcher = new JobDispatcher();
+                hc.SetSingleton<IConfigurationStore>(_configurationStore.Object);
+                hc.SetSingleton<IRunnerServer>(_runnerServer.Object);
+                hc.SetSingleton<IJobNotification>(_jobNotification.Object);
+
+                hc.EnqueueInstance<IProcessChannel>(_processChannel.Object);
+                hc.EnqueueInstance<IProcessInvoker>(_processInvoker.Object);
+
+                _configurationStore.Setup(x => x.GetSettings()).Returns(new RunnerSettings() { PoolId = 1 });
+                jobDispatcher.Initialize(hc);
+
+                Pipelines.AgentJobRequestMessage message = CreateJobRequestMessage();
+                string strMessage = JsonUtility.ToString(message);
+                IDictionary<string, string> capturedEnvironment = null;
+
+                _processInvoker.Setup(x => x.ExecuteAsync(
+                        It.IsAny<String>(),
+                        It.IsAny<String>(),
+                        It.IsAny<String>(),
+                        It.IsAny<IDictionary<string, string>>(),
+                        It.IsAny<bool>(),
+                        It.IsAny<System.Text.Encoding>(),
+                        It.IsAny<bool>(),
+                        It.IsAny<System.Threading.Channels.Channel<string>>(),
+                        It.IsAny<bool>(),
+                        It.IsAny<bool>(),
+                        It.IsAny<bool>(),
+                        It.IsAny<CancellationToken>()))
+                    .Callback<string, string, string, IDictionary<string, string>, bool, System.Text.Encoding, bool, System.Threading.Channels.Channel<string>, bool, bool, bool, CancellationToken>((_, _, _, environment, _, _, _, _, _, _, _, _) =>
+                    {
+                        capturedEnvironment = environment;
+                    })
+                    .Returns(Task.FromResult<int>(56));
+
+                _processChannel.Setup(x => x.StartServer(It.IsAny<StartProcessDelegate>()))
+                    .Callback((StartProcessDelegate startDel) => { startDel("1", "2"); });
+                _processChannel.Setup(x => x.SendAsync(MessageType.NewJobRequest, It.Is<string>(s => s.Equals(strMessage)), It.IsAny<CancellationToken>()))
+                    .Returns(Task.CompletedTask);
+
+                var request = new TaskAgentJobRequest();
+                PropertyInfo sessionIdProperty = request.GetType().GetProperty("LockedUntil", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                Assert.NotNull(sessionIdProperty);
+                sessionIdProperty.SetValue(request, DateTime.UtcNow.AddMinutes(5));
+
+                _runnerServer.Setup(x => x.RenewAgentRequestAsync(It.IsAny<int>(), It.IsAny<long>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.FromResult<TaskAgentJobRequest>(request));
+                _runnerServer.Setup(x => x.FinishAgentRequestAsync(It.IsAny<int>(), It.IsAny<long>(), It.IsAny<Guid>(), It.IsAny<DateTime>(), It.IsAny<TaskResult>(), It.IsAny<CancellationToken>())).Returns(Task.FromResult<TaskAgentJobRequest>(new TaskAgentJobRequest()));
+
+                jobDispatcher.Run(message, false, "/tmp/profile-a");
+                await jobDispatcher.WaitAsync(CancellationToken.None);
+
+                Assert.NotNull(capturedEnvironment);
+                Assert.Equal("/tmp/profile-a", capturedEnvironment[Constants.Variables.Agent.ConfigDirectory]);
             }
         }
 
