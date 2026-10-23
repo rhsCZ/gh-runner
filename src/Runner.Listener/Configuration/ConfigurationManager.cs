@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using GitHub.DistributedTask.WebApi;
 using GitHub.Runner.Common;
 using GitHub.Runner.Common.Util;
+using GitHub.Runner.Listener.MultiRepo;
 using GitHub.Runner.Sdk;
 using GitHub.Services.Common;
 using GitHub.Services.Common.Internal;
@@ -23,6 +24,7 @@ namespace GitHub.Runner.Listener.Configuration
         bool IsConfigured();
         Task ConfigureAsync(CommandSettings command);
         Task UnconfigureAsync(CommandSettings command);
+        void ListProfiles();
         void DeleteLocalRunnerConfig();
         RunnerSettings LoadSettings();
         RunnerSettings LoadMigratedSettings();
@@ -85,6 +87,18 @@ namespace GitHub.Runner.Listener.Configuration
 
         public async Task ConfigureAsync(CommandSettings command)
         {
+            var profileName = command.GetProfileName();
+            if (!string.IsNullOrEmpty(profileName))
+            {
+                await ConfigureProfileAsync(command, profileName);
+                return;
+            }
+
+            await ConfigureSingleRunnerAsync(command, rejectIfAlreadyConfigured: true);
+        }
+
+        private async Task ConfigureSingleRunnerAsync(CommandSettings command, bool rejectIfAlreadyConfigured)
+        {
             _term.WriteLine();
             _term.WriteLine("--------------------------------------------------------------------------------");
             _term.WriteLine("|        ____ _ _   _   _       _          _        _   _                      |");
@@ -121,7 +135,7 @@ namespace GitHub.Runner.Listener.Configuration
 #endif
             }
 
-            if (IsConfigured())
+            if (rejectIfAlreadyConfigured && IsConfigured())
             {
                 throw new InvalidOperationException("Cannot configure the runner because it is already configured. To reconfigure the runner, run 'config.cmd remove' or './config.sh remove' first.");
             }
@@ -492,6 +506,36 @@ namespace GitHub.Runner.Listener.Configuration
 #endif
         }
 
+        private async Task ConfigureProfileAsync(CommandSettings command, string profileName)
+        {
+            if (string.IsNullOrWhiteSpace(profileName))
+            {
+                throw new InvalidOperationException("Profile name must not be empty.");
+            }
+
+            if (RunnerProfileStore.ProfileExists(HostContext, profileName) && !command.GetReplace())
+            {
+                throw new InvalidOperationException($"Profile '{profileName}' already exists. Use --replace to overwrite it.");
+            }
+
+            var snapshot = RunnerProfileStore.CaptureActiveConfiguration(HostContext);
+            try
+            {
+                DeleteLocalRunnerConfigSilently();
+                _store.Reset();
+
+                await ConfigureSingleRunnerAsync(command, rejectIfAlreadyConfigured: false);
+                RunnerProfileStore.SaveActiveConfigurationAsProfile(HostContext, profileName);
+                _term.WriteSuccessMessage($"Profile '{profileName}' saved under .runner.d/{profileName}");
+            }
+            finally
+            {
+                DeleteLocalRunnerConfigSilently();
+                RunnerProfileStore.RestoreActiveConfiguration(HostContext, snapshot);
+                _store.Reset();
+            }
+        }
+
         // Delete .runner and .credentials files
         public void DeleteLocalRunnerConfig()
         {
@@ -525,6 +569,18 @@ namespace GitHub.Runner.Listener.Configuration
         }
 
         public async Task UnconfigureAsync(CommandSettings command)
+        {
+            var profileName = command.GetProfileName();
+            if (!string.IsNullOrEmpty(profileName))
+            {
+                await UnconfigureProfileAsync(command, profileName);
+                return;
+            }
+
+            await UnconfigureSingleRunnerAsync(command);
+        }
+
+        private async Task UnconfigureSingleRunnerAsync(CommandSettings command)
         {
             string currentAction = string.Empty;
 
@@ -617,6 +673,52 @@ namespace GitHub.Runner.Listener.Configuration
             _term.WriteLine();
         }
 
+        private async Task UnconfigureProfileAsync(CommandSettings command, string profileName)
+        {
+            if (!RunnerProfileStore.ProfileExists(HostContext, profileName))
+            {
+                throw new InvalidOperationException($"Profile '{profileName}' does not exist.");
+            }
+
+            if (command.RemoveLocalConfig)
+            {
+                RunnerProfileStore.DeleteProfile(HostContext, profileName);
+                _term.WriteSuccessMessage($"Removed profile '{profileName}' from .runner.d");
+                return;
+            }
+
+            var snapshot = RunnerProfileStore.CaptureActiveConfiguration(HostContext);
+            try
+            {
+                var profile = RunnerProfileStore.LoadProfiles(HostContext).First(x => string.Equals(x.Name, profileName, StringComparison.OrdinalIgnoreCase));
+                RunnerProfileStore.ActivateProfile(HostContext, profile);
+                _store.Reset();
+                await UnconfigureSingleRunnerAsync(command);
+                RunnerProfileStore.DeleteProfile(HostContext, profileName);
+                _term.WriteSuccessMessage($"Removed profile '{profileName}'");
+            }
+            finally
+            {
+                RunnerProfileStore.RestoreActiveConfiguration(HostContext, snapshot);
+                _store.Reset();
+            }
+        }
+
+        public void ListProfiles()
+        {
+            var profiles = RunnerProfileStore.LoadProfiles(HostContext);
+            if (profiles.Count == 0)
+            {
+                _term.WriteLine("No profiles found in .runner.d");
+                return;
+            }
+
+            foreach (var profile in profiles.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                _term.WriteLine($"{profile.Name}\t{profile.Settings.AgentName}\t{profile.Settings.GitHubUrl ?? profile.Settings.ServerUrl}");
+            }
+        }
+
         private ICredentialProvider GetCredentialProvider(CommandSettings command, string serverUrl)
         {
             Trace.Info(nameof(GetCredentialProvider));
@@ -634,6 +736,18 @@ namespace GitHub.Runner.Listener.Configuration
 
             provider.EnsureCredential(HostContext, command, serverUrl);
             return provider;
+        }
+
+        private void DeleteLocalRunnerConfigSilently()
+        {
+            try
+            {
+                DeleteLocalRunnerConfig();
+            }
+            catch (Exception ex)
+            {
+                Trace.Warning($"Ignoring local config cleanup failure. {ex.Message}");
+            }
         }
 
 

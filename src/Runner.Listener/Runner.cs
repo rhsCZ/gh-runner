@@ -15,6 +15,7 @@ using GitHub.Runner.Common;
 using GitHub.Runner.Common.Util;
 using GitHub.Runner.Listener.Check;
 using GitHub.Runner.Listener.Configuration;
+using GitHub.Runner.Listener.MultiRepo;
 using GitHub.Runner.Sdk;
 using GitHub.Services.OAuth;
 using GitHub.Services.WebApi;
@@ -149,11 +150,26 @@ namespace GitHub.Runner.Listener
 
                 // Configure runner prompt for args if not supplied
                 // Unattended configure mode will not prompt for args if not supplied and error on any missing or invalid value.
-                if (command.Configure)
+                if (command.Configure || command.Add)
                 {
                     try
                     {
                         await configManager.ConfigureAsync(command);
+                        return Constants.Runner.ReturnCode.Success;
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.Error(ex);
+                        _term.WriteError(ex.Message);
+                        return Constants.Runner.ReturnCode.TerminatedError;
+                    }
+                }
+
+                if (command.List)
+                {
+                    try
+                    {
+                        configManager.ListProfiles();
                         return Constants.Runner.ReturnCode.Success;
                     }
                     catch (Exception ex)
@@ -267,16 +283,21 @@ namespace GitHub.Runner.Listener
                     }
                 }
 
-                RunnerSettings settings = configManager.LoadSettings();
-
                 var store = HostContext.GetService<IConfigurationStore>();
                 bool configuredAsService = store.IsServiceConfigured();
+                var profileDirectoryProfiles = RunnerProfileStore.LoadProfiles(HostContext);
+                bool useMultiProfileMode = profileDirectoryProfiles.Count > 1;
+                RunnerSettings settings = null;
+                if (!useMultiProfileMode)
+                {
+                    settings = configManager.LoadSettings();
+                }
 
                 // Run runner
                 if (command.Run) // this line is current break machine provisioner.
                 {
                     // Error if runner not configured.
-                    if (!configManager.IsConfigured())
+                    if (!useMultiProfileMode && !configManager.IsConfigured())
                     {
                         _term.WriteError("Runner is not configured.");
                         PrintUsage(command);
@@ -315,7 +336,7 @@ namespace GitHub.Runner.Listener
                         _term.WriteLine("https://docs.github.com/en/actions/hosting-your-own-runners/autoscaling-with-self-hosted-runners#using-ephemeral-runners-for-autoscaling", ConsoleColor.Yellow);
                     }
 
-                    var cred = store.GetCredentials();
+                    var cred = !useMultiProfileMode ? store.GetCredentials() : null;
                     if (cred != null &&
                         cred.Scheme == Constants.Configuration.OAuth &&
                         cred.Data.ContainsKey("EnableAuthMigrationByDefault"))
@@ -328,6 +349,11 @@ namespace GitHub.Runner.Listener
                     var returnJobResultForHosted = StringUtil.ConvertToBoolean(Environment.GetEnvironmentVariable("ACTIONS_RUNNER_RETURN_JOB_RESULT_FOR_HOSTED"));
 
                     // Run the runner interactively or as service
+                    if (useMultiProfileMode)
+                    {
+                        return await ExecuteMultiRepoRunnerAsync(profileDirectoryProfiles);
+                    }
+
                     return await ExecuteRunnerAsync(settings, command.RunOnce || settings.Ephemeral || returnJobResultForHosted, returnJobResultForHosted);
                 }
                 else
@@ -919,6 +945,363 @@ namespace GitHub.Runner.Listener
             } while (restart);
 
             return returnCode;
+        }
+
+        private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile> profiles)
+        {
+            if (profiles.Any(x => !x.Settings.UseV2Flow))
+            {
+                _term.WriteError("Multi-repository mode currently supports only broker-based runner registrations (UseV2Flow=true).");
+                return Constants.Runner.ReturnCode.TerminatedError;
+            }
+
+            if (profiles.Any(x => x.Settings.Ephemeral))
+            {
+                _term.WriteError("Multi-repository mode does not currently support ephemeral registrations.");
+                return Constants.Runner.ReturnCode.TerminatedError;
+            }
+
+            var configurationStore = HostContext.GetService<IConfigurationStore>();
+            var notification = HostContext.GetService<IJobNotification>();
+            notification.StartClient(profiles.First().Settings.MonitorSocketAddress);
+
+            var listenerContexts = new List<RepositoryListenerContext>();
+            foreach (var profile in profiles)
+            {
+                var listener = CreateMultiRepoListener(profile);
+                var result = await listener.CreateSessionAsync(HostContext.RunnerShutdownToken);
+                if (result == CreateSessionResult.Success)
+                {
+                    listenerContexts.Add(new RepositoryListenerContext
+                    {
+                        Profile = profile,
+                        Listener = listener,
+                    });
+                }
+                else
+                {
+                    Trace.Warning($"Failed to create session for profile '{profile.Name}'. Result: {result}");
+                }
+            }
+
+            if (listenerContexts.Count == 0)
+            {
+                _term.WriteError("No repository listener could be started.");
+                return Constants.Runner.ReturnCode.TerminatedError;
+            }
+
+            _term.WriteLine($"Current runner version: '{BuildConstants.RunnerPackage.Version}'");
+            _term.WriteLine($"{DateTime.UtcNow:u}: Listening for Jobs across {listenerContexts.Count} repositories");
+
+            var pendingScheduler = new MultiRepoPendingScheduler();
+            IJobDispatcher activeDispatcher = null;
+            bool shuttingDown = false;
+            try
+            {
+                foreach (var context in listenerContexts)
+                {
+                    context.PollTask = context.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
+                }
+
+                while (!HostContext.RunnerShutdownToken.IsCancellationRequested)
+                {
+                    if (activeDispatcher != null && !activeDispatcher.Busy)
+                    {
+                        await activeDispatcher.WaitAsync(CancellationToken.None);
+                        foreach (var context in listenerContexts)
+                        {
+                            activeDispatcher.JobStatus -= context.Listener.OnJobStatus;
+                        }
+
+                        await activeDispatcher.ShutdownAsync();
+                        activeDispatcher = null;
+                        configurationStore.ClearActiveRunnerSettings();
+                    }
+
+                    if (activeDispatcher == null && pendingScheduler.TryDequeue(out var pendingContext))
+                    {
+                        activeDispatcher = await TryDispatchNextJobForProfileAsync(pendingContext, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
+                        if (pendingContext.PollTask == null)
+                        {
+                            pendingContext.PollTask = pendingContext.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
+                        }
+
+                        continue;
+                    }
+
+                    var pollTasks = listenerContexts
+                        .Where(x => x.PollTask != null)
+                        .Select(x => x.PollTask)
+                        .Cast<Task>()
+                        .ToList();
+                    pollTasks.Add(Task.Delay(TimeSpan.FromMilliseconds(500), HostContext.RunnerShutdownToken));
+
+                    var completedTask = await Task.WhenAny(pollTasks);
+                    if (completedTask is not Task<TaskAgentMessage> completedPoll)
+                    {
+                        continue;
+                    }
+
+                    var completedContext = listenerContexts.FirstOrDefault(x => x.PollTask == completedPoll);
+                    if (completedContext == null)
+                    {
+                        continue;
+                    }
+
+                    completedContext.PollTask = null;
+
+                    TaskAgentMessage message = null;
+                    try
+                    {
+                        message = await completedPoll;
+                    }
+                    catch (Exception ex) when (ex is TaskAgentNotFoundException || ex is RunnerNotFoundException)
+                    {
+                        Trace.Warning($"Profile '{completedContext.Profile.Name}' is no longer registered. {ex.Message}");
+                        await SafeDeleteSessionAsync(completedContext.Listener);
+                        listenerContexts.Remove(completedContext);
+                        if (listenerContexts.Count == 0)
+                        {
+                            _term.WriteError("All repository registrations were removed or became unavailable.");
+                            return Constants.Runner.ReturnCode.TerminatedError;
+                        }
+                        continue;
+                    }
+
+                    if (message == null)
+                    {
+                        completedContext.PollTask = completedContext.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
+                        continue;
+                    }
+
+                    var messageResult = await HandleMultiRepoMessageAsync(
+                        completedContext,
+                        message,
+                        listenerContexts,
+                        pendingScheduler,
+                        activeDispatcher,
+                        configurationStore);
+
+                    activeDispatcher ??= messageResult.Dispatcher;
+
+                    if (messageResult.ContinuePolling && completedContext.PollTask == null && !completedContext.PendingWork)
+                    {
+                        completedContext.PollTask = completedContext.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (HostContext.RunnerShutdownToken.IsCancellationRequested)
+            {
+                shuttingDown = true;
+            }
+            finally
+            {
+                if (activeDispatcher != null)
+                {
+                    foreach (var context in listenerContexts)
+                    {
+                        activeDispatcher.JobStatus -= context.Listener.OnJobStatus;
+                    }
+
+                    await activeDispatcher.ShutdownAsync();
+                }
+
+                configurationStore.ClearActiveRunnerSettings();
+
+                foreach (var context in listenerContexts)
+                {
+                    await SafeDeleteSessionAsync(context.Listener);
+                }
+            }
+
+            return shuttingDown ? Constants.Runner.ReturnCode.Success : Constants.Runner.ReturnCode.Success;
+        }
+
+        private IMessageListener CreateMultiRepoListener(RunnerProfile profile)
+        {
+            var runnerServer = HostContext.CreateService<IRunnerServer>();
+            var brokerServer = HostContext.CreateService<IBrokerServer>();
+            var listener = new BrokerMessageListener(profile.Settings, profile.Credential, runnerServer, brokerServer, profile.RootPath);
+            listener.Initialize(HostContext);
+            return listener;
+        }
+
+        private async Task<(bool ContinuePolling, IJobDispatcher Dispatcher)> HandleMultiRepoMessageAsync(
+            RepositoryListenerContext context,
+            TaskAgentMessage message,
+            IReadOnlyList<RepositoryListenerContext> listenerContexts,
+            MultiRepoPendingScheduler pendingScheduler,
+            IJobDispatcher activeDispatcher,
+            IConfigurationStore configurationStore)
+        {
+            HostContext.WritePerfCounter($"MessageReceived_{message.MessageType}_{context.Profile.Name}");
+
+            if (MessageUtil.IsRunServiceJob(message.MessageType))
+            {
+                if (activeDispatcher == null)
+                {
+                    var dispatched = await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
+                    return (dispatched == null, dispatched);
+                }
+
+                if (pendingScheduler.EnqueuePending(context))
+                {
+                    Trace.Info($"Queued pending work for profile '{context.Profile.Name}'.");
+                }
+
+                return (false, null);
+            }
+
+            if (string.Equals(message.MessageType, JobCancelMessage.MessageType, StringComparison.OrdinalIgnoreCase))
+            {
+                if (activeDispatcher != null)
+                {
+                    var cancelJobMessage = JsonUtility.FromString<JobCancelMessage>(message.Body);
+                    activeDispatcher.Cancel(cancelJobMessage);
+                }
+
+                return (true, null);
+            }
+
+            if (string.Equals(message.MessageType, TaskAgentMessageTypes.ForceTokenRefresh, StringComparison.OrdinalIgnoreCase))
+            {
+                await context.Listener.RefreshListenerTokenAsync();
+                return (true, null);
+            }
+
+            if (string.Equals(message.MessageType, AgentRefreshMessage.MessageType, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(message.MessageType, RunnerRefreshMessage.MessageType, StringComparison.OrdinalIgnoreCase))
+            {
+                Trace.Warning($"Ignoring self-update message for profile '{context.Profile.Name}' while multi-repository mode is active.");
+                return (true, null);
+            }
+
+            if (string.Equals(message.MessageType, RunnerRefreshConfigMessage.MessageType, StringComparison.OrdinalIgnoreCase))
+            {
+                Trace.Warning($"Ignoring runner config refresh message for profile '{context.Profile.Name}' while multi-repository mode is active.");
+                return (true, null);
+            }
+
+            Trace.Warning($"Ignoring unsupported multi-repo message type '{message.MessageType}' for profile '{context.Profile.Name}'.");
+            return (true, null);
+        }
+
+        private async Task<IJobDispatcher> TryDispatchNextJobForProfileAsync(
+            RepositoryListenerContext context,
+            IReadOnlyList<RepositoryListenerContext> listenerContexts,
+            IConfigurationStore configurationStore,
+            CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var message = await context.Listener.GetNextMessageAsync(cancellationToken);
+                if (message == null)
+                {
+                    continue;
+                }
+
+                if (!MessageUtil.IsRunServiceJob(message.MessageType))
+                {
+                    await HandleMultiRepoMessageAsync(
+                        context,
+                        message,
+                        listenerContexts,
+                        new MultiRepoPendingScheduler(),
+                        null,
+                        configurationStore);
+                    continue;
+                }
+
+                return await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, cancellationToken);
+            }
+
+            return null;
+        }
+
+        private async Task<IJobDispatcher> TryDispatchBrokerMessageAsync(
+            RepositoryListenerContext context,
+            TaskAgentMessage message,
+            IReadOnlyList<RepositoryListenerContext> listenerContexts,
+            IConfigurationStore configurationStore,
+            CancellationToken cancellationToken)
+        {
+            var messageRef = StringUtil.ConvertFromJson<RunnerJobRequestRef>(message.Body);
+            if (messageRef.ShouldAcknowledge)
+            {
+                try
+                {
+                    await context.Listener.AcknowledgeMessageAsync(messageRef.RunnerRequestId, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    Trace.Error($"Best-effort acknowledge failed for profile '{context.Profile.Name}', request '{messageRef.RunnerRequestId}'.");
+                    Trace.Error(ex);
+                }
+            }
+
+            var jobRequestMessage = await AcquireJobMessageAsync(context.Profile, messageRef, cancellationToken);
+            if (jobRequestMessage == null)
+            {
+                return null;
+            }
+
+            RunnerProfileStore.ActivateProfile(HostContext, context.Profile);
+            configurationStore.SetActiveRunnerSettings(context.Profile.Settings);
+
+            var jobDispatcher = HostContext.CreateService<IJobDispatcher>();
+            foreach (var listenerContext in listenerContexts)
+            {
+                jobDispatcher.JobStatus += listenerContext.Listener.OnJobStatus;
+            }
+
+            jobDispatcher.Run(jobRequestMessage, false);
+            return jobDispatcher;
+        }
+
+        private async Task<Pipelines.AgentJobRequestMessage> AcquireJobMessageAsync(
+            RunnerProfile profile,
+            RunnerJobRequestRef messageRef,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(messageRef.RunServiceUrl))
+            {
+                var creds = ProfileCredentialFactory.Create(HostContext, profile.Credential, allowAuthUrlV2: false, profile.RootPath);
+                var actionsRunServer = HostContext.CreateService<IActionsRunServer>();
+                await actionsRunServer.ConnectAsync(new Uri(profile.Settings.ServerUrl), creds);
+                return await actionsRunServer.GetJobMessageAsync(messageRef.RunnerRequestId, cancellationToken);
+            }
+
+            var credsV2 = ProfileCredentialFactory.Create(HostContext, profile.Credential, allowAuthUrlV2: true, profile.RootPath);
+            var runServer = HostContext.CreateService<IRunServer>();
+            await runServer.ConnectAsync(new Uri(messageRef.RunServiceUrl), credsV2);
+
+            try
+            {
+                var jobMessage = await runServer.GetJobMessageAsync(messageRef.RunnerRequestId, messageRef.BillingOwnerId, cancellationToken);
+                _acquireJobThrottler.Reset();
+                return jobMessage;
+            }
+            catch (Exception ex) when (
+                ex is TaskOrchestrationJobNotFoundException ||
+                ex is TaskOrchestrationJobAlreadyAcquiredException ||
+                ex is TaskOrchestrationJobUnprocessableException)
+            {
+                Trace.Info($"Skipping pending job for profile '{profile.Name}'. {ex.Message}");
+                await _acquireJobThrottler.IncrementAndWaitAsync(cancellationToken);
+                return null;
+            }
+        }
+
+        private async Task SafeDeleteSessionAsync(IMessageListener listener)
+        {
+            try
+            {
+                await listener.DeleteSessionAsync();
+            }
+            catch (Exception ex)
+            {
+                Trace.Warning($"Failed to delete listener session. {ex.Message}");
+            }
         }
 
         private void HandleAuthMigrationChanged(object sender, AuthMigrationEventArgs e)

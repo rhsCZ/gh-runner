@@ -1,0 +1,23 @@
+name: repo-a-dispatch-test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  repo-a-job:
+    runs-on:
+      - self-hosted
+      - multi-repo-test
+    steps:
+      - name: Show repository context
+        run: |
+          echo "repository=${GITHUB_REPOSITORY}"
+          echo "run_id=${GITHUB_RUN_ID}"
+          echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+          echo "runner_name=${RUNNER_NAME}"
+          date -u
+      - name: Simulate long-running work
+        run: |
+          echo "repo-a start"
+          sleep 45
+          echo "repo-a done"
