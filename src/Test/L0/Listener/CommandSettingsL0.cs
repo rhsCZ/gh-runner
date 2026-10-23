@@ -2,6 +2,7 @@
 using GitHub.Runner.Listener.Configuration;
 using Moq;
 using System;
+using System.IO;
 using System.Runtime.CompilerServices;
 using Xunit;
 
@@ -309,6 +310,82 @@ namespace GitHub.Runner.Common.Tests
             {
                 var command = new CommandSettings(hc, args: new string[] { "--profile", "repo-a" });
                 Assert.Equal("repo-a", command.GetProfileName());
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", nameof(CommandSettings))]
+        public void GetsMaxConcurrentJobsArg()
+        {
+            using (TestHostContext hc = CreateTestContext())
+            {
+                var command = new CommandSettings(hc, args: new string[] { "run", "--maxconcurrentjobs", "3" });
+                Assert.Equal(3, command.GetMaxConcurrentJobs());
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", nameof(CommandSettings))]
+        public void GetsMaxConcurrentJobsArg_DefaultsWhenInvalid()
+        {
+            using (TestHostContext hc = CreateTestContext())
+            {
+                var command = new CommandSettings(hc, args: new string[] { "run", "--maxconcurrentjobs", "bad arg value" });
+                Assert.Equal(1, command.GetMaxConcurrentJobs());
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", nameof(CommandSettings))]
+        public void GetsMaxConcurrentJobsFromEnvVar()
+        {
+            using (TestHostContext hc = CreateTestContext())
+            {
+                try
+                {
+                    Environment.SetEnvironmentVariable("ACTIONS_RUNNER_INPUT_MAXCONCURRENTJOBS", "4");
+                    var command = new CommandSettings(hc, args: Array.Empty<string>());
+                    Assert.Equal(4, command.GetMaxConcurrentJobs());
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable("ACTIONS_RUNNER_INPUT_MAXCONCURRENTJOBS", null);
+                }
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", nameof(CommandSettings))]
+        public void GetsMaxConcurrentJobsFromSharedConfig()
+        {
+            using (TestHostContext hc = CreateTestContext())
+            {
+                var optionsPath = hc.GetConfigFile(WellKnownConfigFile.Options);
+                Directory.CreateDirectory(Path.GetDirectoryName(optionsPath));
+                File.WriteAllText(optionsPath, "{\"MaxConcurrentJobs\":5}");
+
+                var command = new CommandSettings(hc, args: new string[] { "run" });
+                Assert.Equal(5, command.GetMaxConcurrentJobs());
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", nameof(CommandSettings))]
+        public void GetsMaxConcurrentJobsArgOverridesSharedConfig()
+        {
+            using (TestHostContext hc = CreateTestContext())
+            {
+                var optionsPath = hc.GetConfigFile(WellKnownConfigFile.Options);
+                Directory.CreateDirectory(Path.GetDirectoryName(optionsPath));
+                File.WriteAllText(optionsPath, "{\"MaxConcurrentJobs\":5}");
+
+                var command = new CommandSettings(hc, args: new string[] { "run", "--maxconcurrentjobs", "2" });
+                Assert.Equal(2, command.GetMaxConcurrentJobs());
             }
         }
 
@@ -899,6 +976,7 @@ namespace GitHub.Runner.Common.Tests
         [InlineData("configure", "work", "good arg value")]
         [InlineData("remove", "token", "good arg value")]
         [InlineData("remove", "pat", "good arg value")]
+        [InlineData("run", "maxconcurrentjobs", "3")]
         [InlineData("run", "startuptype", "good arg value")]
         [Trait("Level", "L0")]
         [Trait("Category", nameof(CommandSettings))]

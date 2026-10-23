@@ -22,6 +22,8 @@ if /i "%~1" equ "remove" (
     "%~dp0bin\Runner.Listener.exe" %*
 ) else if /i "%~1" equ "add" (
     "%~dp0bin\Runner.Listener.exe" %*
+) else if /i "%~1" equ "set" (
+    "%~dp0bin\Runner.Listener.exe" %*
 ) else if /i "%~1" equ "configure" (
     "%~dp0bin\Runner.Listener.exe" %*
 ) else (
