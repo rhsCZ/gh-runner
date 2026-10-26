@@ -18,6 +18,12 @@ if /i "%~1" equ "remove" (
     rem Unconfigure the runner.
     rem ********************************************************************************
     "%~dp0bin\Runner.Listener.exe" %*
+) else if /i "%~1" equ "list" (
+    "%~dp0bin\Runner.Listener.exe" %*
+) else if /i "%~1" equ "add" (
+    "%~dp0bin\Runner.Listener.exe" %*
+) else if /i "%~1" equ "configure" (
+    "%~dp0bin\Runner.Listener.exe" %*
 ) else (
     rem ********************************************************************************
     rem Configure the runner.
