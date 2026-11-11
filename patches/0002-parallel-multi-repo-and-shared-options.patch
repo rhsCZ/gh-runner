@@ -506,7 +506,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
 +                            activeDispatchers.Add(activeDispatcher);
 +                            if (activeDispatchers.Count == 1)
 +                            {
-+                                BroadcastMultiRepoJobStatus(listenerContexts, TaskAgentStatus.Busy);
++                                BroadcastMultiRepoJobStatus(activeDispatcher.Context, TaskAgentStatus.Busy);
 +                            }
                          }
  
@@ -536,7 +536,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
 +                        activeDispatchers.Add(messageResult.Dispatcher);
 +                        if (activeDispatchers.Count == 1)
 +                        {
-+                            BroadcastMultiRepoJobStatus(listenerContexts, TaskAgentStatus.Busy);
++                            BroadcastMultiRepoJobStatus(messageResult.Dispatcher.Context, TaskAgentStatus.Busy);
 +                        }
 +                    }
  
@@ -640,7 +640,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
              RepositoryListenerContext context,
              TaskAgentMessage message,
              IReadOnlyList<RepositoryListenerContext> listenerContexts,
-@@ -1249,15 +1280,49 @@ private async Task<IJobDispatcher> TryDispatchBrokerMessageAsync(
+@@ -1249,15 +1280,45 @@ private async Task<IJobDispatcher> TryDispatchBrokerMessageAsync(
              configurationStore.SetActiveRunnerSettings(context.Profile.Settings);
  
              var jobDispatcher = HostContext.CreateService<IJobDispatcher>();
@@ -655,7 +655,6 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
 +            List<ActiveMultiRepoDispatch> activeDispatchers,
 +            IReadOnlyList<RepositoryListenerContext> listenerContexts)
 +        {
-+            var hadActiveDispatchers = activeDispatchers.Count > 0;
 +            for (var index = activeDispatchers.Count - 1; index >= 0; index--)
              {
 -                jobDispatcher.JobStatus += listenerContext.Listener.OnJobStatus;
@@ -668,25 +667,22 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
 +                await activeDispatcher.Dispatcher.WaitAsync(CancellationToken.None);
 +                await activeDispatcher.Dispatcher.ShutdownAsync();
 +                activeDispatchers.RemoveAt(index);
++                if (!activeDispatchers.Any(x => string.Equals(x.Context.Profile.Name, activeDispatcher.Context.Profile.Name, StringComparison.OrdinalIgnoreCase)))
++                {
++                    BroadcastMultiRepoJobStatus(activeDispatcher.Context, TaskAgentStatus.Online);
++                }
              }
  
 -            jobDispatcher.Run(jobRequestMessage, false);
 -            return jobDispatcher;
-+            if (hadActiveDispatchers && activeDispatchers.Count == 0)
-+            {
-+                BroadcastMultiRepoJobStatus(listenerContexts, TaskAgentStatus.Online);
-+            }
          }
  
 +        private static void BroadcastMultiRepoJobStatus(
-+            IReadOnlyList<RepositoryListenerContext> listenerContexts,
++            RepositoryListenerContext context,
 +            TaskAgentStatus status)
 +        {
 +            var jobStatus = new JobStatusEventArgs(status);
-+            foreach (var context in listenerContexts)
-+            {
-+                context.Listener.OnJobStatus(null, jobStatus);
-+            }
++            context.Listener.OnJobStatus(null, jobStatus);
 +        }
 +
 +        private sealed record ActiveMultiRepoDispatch(RepositoryListenerContext Context, IJobDispatcher Dispatcher);
