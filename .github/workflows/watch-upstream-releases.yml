@@ -14,7 +14,7 @@ on:
         required: false
         default: ""
       rebuild_existing_release:
-        description: Re-import upstream, apply current patches, rebuild, and replace an existing release
+        description: Re-import upstream, apply current patches, rebuild, replace assets, and move the release tag
         required: false
         default: false
         type: boolean
@@ -53,6 +53,15 @@ jobs:
             --release-tag "${RELEASE_TAG}" \
             --target-branch "${TARGET_BRANCH}"
 
+      - name: Require rebuild option for an existing release
+        if: ${{ github.event_name == 'workflow_dispatch' && steps.upstream.outputs.release_exists == 'true' && !inputs.rebuild_existing_release }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.upstream.outputs.release_tag }}
+        run: |
+          echo "Release ${RELEASE_TAG} already exists. Enable rebuild_existing_release to replace it." >&2
+          exit 1
+
       - name: Import source history and apply local commits
         if: ${{ steps.upstream.outputs.needs_import == 'true' || inputs.rebuild_existing_release }}
         shell: bash
@@ -68,6 +77,7 @@ jobs:
         run: git push --force-with-lease origin "${{ steps.upstream.outputs.target_branch }}:${{ steps.upstream.outputs.target_branch }}"
 
       - name: Dispatch build workflow
+        id: dispatch
         if: ${{ (steps.upstream.outputs.needs_build == 'true' && steps.upstream.outputs.release_exists == 'false') || inputs.rebuild_existing_release }}
         shell: bash
         env:
@@ -78,4 +88,22 @@ jobs:
             args+=(--field "source_ref=${{ steps.upstream.outputs.target_branch }}")
             args+=(--field "rebuild_existing_release=true")
           fi
-          gh workflow run build-runner.yml "${args[@]}"
+          if ! output=$(gh workflow run build-runner.yml "${args[@]}" 2>&1); then
+            printf '%s\n' "$output" >&2
+            exit 1
+          fi
+          printf '%s\n' "$output"
+          run_url=$(printf '%s\n' "$output" | grep -Eo 'https://github\.com/[^[:space:]]+/actions/runs/[0-9]+' | tail -1)
+          if [[ -z "$run_url" ]]; then
+            echo "Could not determine the dispatched build run ID." >&2
+            exit 1
+          fi
+          printf 'run_id=%s\n' "${run_url##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for build and release publish
+        if: ${{ steps.dispatch.outcome == 'success' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: gh run watch "$BUILD_RUN_ID" --exit-status --interval 15

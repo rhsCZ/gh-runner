@@ -1,8 +1,5 @@
-# Parallel multi-repository execution and shared maxConcurrentJobs options
-# Source commit: 35d7bd10e0fedd3b8963c983d74048416d623124
-# Generated from rhsCZ/runner; upstream workflow files are intentionally excluded.
-
 diff --git a/src/Misc/layoutroot/config.cmd b/src/Misc/layoutroot/config.cmd
+index 12c0893..839ac16 100644
 --- a/src/Misc/layoutroot/config.cmd
 +++ b/src/Misc/layoutroot/config.cmd
 @@ -22,6 +22,8 @@ if /i "%~1" equ "remove" (
@@ -15,6 +12,7 @@ diff --git a/src/Misc/layoutroot/config.cmd b/src/Misc/layoutroot/config.cmd
      "%~dp0bin\Runner.Listener.exe" %*
  ) else (
 diff --git a/src/Misc/layoutroot/config.sh b/src/Misc/layoutroot/config.sh
+index bb9df55..df4697b 100755
 --- a/src/Misc/layoutroot/config.sh
 +++ b/src/Misc/layoutroot/config.sh
 @@ -74,7 +74,7 @@ cd "$DIR"
@@ -27,9 +25,10 @@ diff --git a/src/Misc/layoutroot/config.sh b/src/Misc/layoutroot/config.sh
  else
      ./bin/Runner.Listener configure "$@"
 diff --git a/src/Runner.Common/Constants.cs b/src/Runner.Common/Constants.cs
+index 25be171..7f94225 100644
 --- a/src/Runner.Common/Constants.cs
 +++ b/src/Runner.Common/Constants.cs
-@@ -96,6 +96,7 @@ public static class Args
+@@ -96,6 +96,7 @@ namespace GitHub.Runner.Common
                  {
                      public static readonly string Auth = "auth";
                      public static readonly string Labels = "labels";
@@ -37,7 +36,7 @@ diff --git a/src/Runner.Common/Constants.cs b/src/Runner.Common/Constants.cs
                      public static readonly string MonitorSocketAddress = "monitorsocketaddress";
                      public static readonly string Name = "name";
                      public static readonly string Profile = "profile";
-@@ -127,6 +128,7 @@ public static class Commands
+@@ -127,6 +128,7 @@ namespace GitHub.Runner.Common
                      public static readonly string List = "list";
                      public static readonly string Remove = "remove";
                      public static readonly string Run = "run";
@@ -45,7 +44,7 @@ diff --git a/src/Runner.Common/Constants.cs b/src/Runner.Common/Constants.cs
                      public static readonly string Warmup = "warmup";
                  }
  
-@@ -330,6 +332,7 @@ public static class Agent
+@@ -330,6 +332,7 @@ namespace GitHub.Runner.Common
                  public static readonly string ActionArchiveCacheDirectory = "ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE";
                  public static readonly string SymlinkCachedActions = "ACTIONS_RUNNER_SYMLINK_CACHED_ACTIONS";
                  public static readonly string EmitCompositeMarkers = "ACTIONS_RUNNER_EMIT_COMPOSITE_MARKERS";
@@ -54,9 +53,10 @@ diff --git a/src/Runner.Common/Constants.cs b/src/Runner.Common/Constants.cs
  
              public static class System
 diff --git a/src/Runner.Common/HostContext.cs b/src/Runner.Common/HostContext.cs
+index ffb0868..eae5bb7 100644
 --- a/src/Runner.Common/HostContext.cs
 +++ b/src/Runner.Common/HostContext.cs
-@@ -444,60 +444,61 @@ public string GetDirectory(WellKnownDirectory directory)
+@@ -444,60 +444,61 @@ namespace GitHub.Runner.Common
  
          public string GetConfigFile(WellKnownConfigFile configFile)
          {
@@ -127,7 +127,7 @@ diff --git a/src/Runner.Common/HostContext.cs b/src/Runner.Common/HostContext.cs
                          ".certificates");
                      break;
  
-@@ -509,7 +510,7 @@ public string GetConfigFile(WellKnownConfigFile configFile)
+@@ -509,7 +510,7 @@ namespace GitHub.Runner.Common
  
                  case WellKnownConfigFile.SetupInfo:
                      path = Path.Combine(
@@ -136,7 +136,7 @@ diff --git a/src/Runner.Common/HostContext.cs b/src/Runner.Common/HostContext.cs
                          ".setup_info");
                      break;
  
-@@ -527,6 +528,17 @@ public string GetConfigFile(WellKnownConfigFile configFile)
+@@ -527,6 +528,17 @@ namespace GitHub.Runner.Common
              return path;
          }
  
@@ -154,22 +154,11 @@ diff --git a/src/Runner.Common/HostContext.cs b/src/Runner.Common/HostContext.cs
          public Tracing GetTrace(string name)
          {
              return _traceManager[name];
-diff --git a/src/Runner.Common/RunnerGlobalOptions.cs b/src/Runner.Common/RunnerGlobalOptions.cs
-new file mode 100644
---- /dev/null
-+++ b/src/Runner.Common/RunnerGlobalOptions.cs
-@@ -0,0 +1,7 @@
-+namespace GitHub.Runner.Common
-+{
-+    public sealed class RunnerGlobalOptions
-+    {
-+        public int? MaxConcurrentJobs { get; set; }
-+    }
-+}
 diff --git a/src/Runner.Listener/CommandSettings.cs b/src/Runner.Listener/CommandSettings.cs
+index bfe4bb7..7eb1e37 100644
 --- a/src/Runner.Listener/CommandSettings.cs
 +++ b/src/Runner.Listener/CommandSettings.cs
-@@ -6,15 +6,19 @@
+@@ -6,15 +6,19 @@ using System.Collections.Generic;
  using System.Linq;
  using GitHub.Runner.Common;
  using GitHub.Runner.Sdk;
@@ -189,7 +178,7 @@ diff --git a/src/Runner.Listener/CommandSettings.cs b/src/Runner.Listener/Comman
  
          // Valid flags for all commands
          private readonly string[] genericOptions =
-@@ -92,8 +96,14 @@ public sealed class CommandSettings
+@@ -92,8 +96,14 @@ namespace GitHub.Runner.Listener
                  {
                      Constants.Runner.CommandLine.Flags.Once,
                      Constants.Runner.CommandLine.Args.JitConfig,
@@ -204,7 +193,7 @@ diff --git a/src/Runner.Listener/CommandSettings.cs b/src/Runner.Listener/Comman
              // valid warmup flags and args
              [Constants.Runner.CommandLine.Commands.Warmup] =
                  new string[] { }
-@@ -105,6 +115,7 @@ public sealed class CommandSettings
+@@ -105,6 +115,7 @@ namespace GitHub.Runner.Listener
          public bool Remove => TestCommand(Constants.Runner.CommandLine.Commands.Remove);
          public bool List => TestCommand(Constants.Runner.CommandLine.Commands.List);
          public bool Run => TestCommand(Constants.Runner.CommandLine.Commands.Run);
@@ -212,7 +201,7 @@ diff --git a/src/Runner.Listener/CommandSettings.cs b/src/Runner.Listener/Comman
          public bool Warmup => TestCommand(Constants.Runner.CommandLine.Commands.Warmup);
  
          // Flags.
-@@ -126,6 +137,7 @@ public sealed class CommandSettings
+@@ -126,6 +137,7 @@ namespace GitHub.Runner.Listener
          public CommandSettings(IHostContext context, string[] args)
          {
              ArgUtil.NotNull(context, nameof(context));
@@ -220,7 +209,7 @@ diff --git a/src/Runner.Listener/CommandSettings.cs b/src/Runner.Listener/Comman
              _promptManager = context.GetService<IPromptManager>();
              _trace = context.GetTrace(nameof(CommandSettings));
  
-@@ -216,6 +228,10 @@ public string GetCommandName()
+@@ -216,6 +228,10 @@ namespace GitHub.Runner.Listener
              {
                  command = Constants.Runner.CommandLine.Commands.Run;
              }
@@ -231,7 +220,7 @@ diff --git a/src/Runner.Listener/CommandSettings.cs b/src/Runner.Listener/Comman
              else if (Warmup)
              {
                  command = Constants.Runner.CommandLine.Commands.Warmup;
-@@ -382,6 +398,34 @@ public string GetStartupType()
+@@ -382,6 +398,34 @@ namespace GitHub.Runner.Listener
              return GetArg(Constants.Runner.CommandLine.Args.StartupType);
          }
  
@@ -266,7 +255,7 @@ diff --git a/src/Runner.Listener/CommandSettings.cs b/src/Runner.Listener/Comman
          public ISet<string> GetLabels()
          {
              var labelSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-@@ -519,5 +563,33 @@ private bool TestFlagOrPrompt(
+@@ -519,5 +563,33 @@ namespace GitHub.Runner.Listener
  
              return result;
          }
@@ -301,9 +290,10 @@ diff --git a/src/Runner.Listener/CommandSettings.cs b/src/Runner.Listener/Comman
      }
  }
 diff --git a/src/Runner.Listener/Configuration/ConfigurationManager.cs b/src/Runner.Listener/Configuration/ConfigurationManager.cs
+index fc486a7..1ac2350 100644
 --- a/src/Runner.Listener/Configuration/ConfigurationManager.cs
 +++ b/src/Runner.Listener/Configuration/ConfigurationManager.cs
-@@ -25,6 +25,7 @@ public interface IConfigurationManager : IRunnerService
+@@ -25,6 +25,7 @@ namespace GitHub.Runner.Listener.Configuration
          Task ConfigureAsync(CommandSettings command);
          Task UnconfigureAsync(CommandSettings command);
          void ListProfiles();
@@ -311,7 +301,7 @@ diff --git a/src/Runner.Listener/Configuration/ConfigurationManager.cs b/src/Run
          void DeleteLocalRunnerConfig();
          RunnerSettings LoadSettings();
          RunnerSettings LoadMigratedSettings();
-@@ -719,6 +720,36 @@ public void ListProfiles()
+@@ -719,6 +720,36 @@ namespace GitHub.Runner.Listener.Configuration
              }
          }
  
@@ -349,9 +339,10 @@ diff --git a/src/Runner.Listener/Configuration/ConfigurationManager.cs b/src/Run
          {
              Trace.Info(nameof(GetCredentialProvider));
 diff --git a/src/Runner.Listener/JobDispatcher.cs b/src/Runner.Listener/JobDispatcher.cs
+index dcc8966..cca5b50 100644
 --- a/src/Runner.Listener/JobDispatcher.cs
 +++ b/src/Runner.Listener/JobDispatcher.cs
-@@ -26,6 +26,7 @@ public interface IJobDispatcher : IRunnerService
+@@ -26,6 +26,7 @@ namespace GitHub.Runner.Listener
          bool Busy { get; }
          TaskCompletionSource<TaskResult> RunOnceJobCompleted { get; }
          void Run(Pipelines.AgentJobRequestMessage message, bool runOnce = false);
@@ -359,7 +350,7 @@ diff --git a/src/Runner.Listener/JobDispatcher.cs b/src/Runner.Listener/JobDispa
          bool Cancel(JobCancelMessage message);
          Task WaitAsync(CancellationToken token);
          Task ShutdownAsync();
-@@ -87,6 +88,11 @@ public override void Initialize(IHostContext hostContext)
+@@ -87,6 +88,11 @@ namespace GitHub.Runner.Listener
          public bool Busy { get; private set; }
  
          public void Run(Pipelines.AgentJobRequestMessage jobRequestMessage, bool runOnce = false)
@@ -371,7 +362,7 @@ diff --git a/src/Runner.Listener/JobDispatcher.cs b/src/Runner.Listener/JobDispa
          {
              Trace.Info($"Job request {jobRequestMessage.RequestId} for plan {jobRequestMessage.Plan.PlanId} job {jobRequestMessage.JobId} received.");
  
-@@ -126,11 +132,11 @@ public void Run(Pipelines.AgentJobRequestMessage jobRequestMessage, bool runOnce
+@@ -126,11 +132,11 @@ namespace GitHub.Runner.Listener
              if (runOnce)
              {
                  Trace.Info("Start dispatcher for one time used runner.");
@@ -385,7 +376,7 @@ diff --git a/src/Runner.Listener/JobDispatcher.cs b/src/Runner.Listener/JobDispa
              }
  
              _jobInfos.TryAdd(newDispatch.JobId, newDispatch);
-@@ -340,12 +346,12 @@ private async Task EnsureDispatchFinished(WorkerDispatcher jobDispatch, bool can
+@@ -340,12 +346,12 @@ namespace GitHub.Runner.Listener
              }
          }
  
@@ -400,7 +391,7 @@ diff --git a/src/Runner.Listener/JobDispatcher.cs b/src/Runner.Listener/JobDispa
              }
              finally
              {
-@@ -354,7 +360,7 @@ private async Task RunOnceAsync(Pipelines.AgentJobRequestMessage message, string
+@@ -354,7 +360,7 @@ namespace GitHub.Runner.Listener
              }
          }
  
@@ -409,7 +400,7 @@ diff --git a/src/Runner.Listener/JobDispatcher.cs b/src/Runner.Listener/JobDispa
          {
              Busy = true;
              try
-@@ -474,11 +480,20 @@ private async Task<TaskResult> RunAsync(Pipelines.AgentJobRequestMessage message
+@@ -474,11 +480,20 @@ namespace GitHub.Runner.Listener
                                  HostContext.WritePerfCounter("StartingWorkerProcess");
                                  var assemblyDirectory = HostContext.GetDirectory(WellKnownDirectory.Bin);
                                  string workerFileName = Path.Combine(assemblyDirectory, _workerProcessName);
@@ -432,9 +423,10 @@ diff --git a/src/Runner.Listener/JobDispatcher.cs b/src/Runner.Listener/JobDispa
                                      outputEncoding: null,
                                      killProcessOnCancel: true,
 diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
+index 1874927..45ee0e9 100644
 --- a/src/Runner.Listener/Runner.cs
 +++ b/src/Runner.Listener/Runner.cs
-@@ -180,6 +180,21 @@ public async Task<int> ExecuteCommand(CommandSettings command)
+@@ -180,6 +180,21 @@ namespace GitHub.Runner.Listener
                      }
                  }
  
@@ -456,7 +448,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
                  // remove config files, remove service, and exit
                  if (command.Remove)
                  {
-@@ -351,7 +366,7 @@ public async Task<int> ExecuteCommand(CommandSettings command)
+@@ -351,7 +366,7 @@ namespace GitHub.Runner.Listener
                      // Run the runner interactively or as service
                      if (useMultiProfileMode)
                      {
@@ -465,7 +457,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
                      }
  
                      return await ExecuteRunnerAsync(settings, command.RunOnce || settings.Ephemeral || returnJobResultForHosted, returnJobResultForHosted);
-@@ -947,7 +962,7 @@ private async Task<int> ExecuteRunnerAsync(RunnerSettings settings, bool runOnce
+@@ -947,7 +962,7 @@ namespace GitHub.Runner.Listener
              return returnCode;
          }
  
@@ -474,7 +466,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
          {
              if (profiles.Any(x => !x.Settings.UseV2Flow))
              {
-@@ -991,10 +1006,11 @@ private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile>
+@@ -991,10 +1006,11 @@ namespace GitHub.Runner.Listener
              }
  
              _term.WriteLine($"Current runner version: '{BuildConstants.RunnerPackage.Version}'");
@@ -488,7 +480,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
              bool shuttingDown = false;
              try
              {
-@@ -1005,22 +1021,20 @@ private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile>
+@@ -1005,22 +1021,20 @@ namespace GitHub.Runner.Listener
  
                  while (!HostContext.RunnerShutdownToken.IsCancellationRequested)
                  {
@@ -521,7 +513,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
                          if (pendingContext.PollTask == null)
                          {
                              pendingContext.PollTask = pendingContext.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
-@@ -1079,10 +1093,18 @@ private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile>
+@@ -1079,10 +1093,18 @@ namespace GitHub.Runner.Listener
                          message,
                          listenerContexts,
                          pendingScheduler,
@@ -542,7 +534,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
  
                      if (messageResult.ContinuePolling && completedContext.PollTask == null && !completedContext.PendingWork)
                      {
-@@ -1096,14 +1118,9 @@ private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile>
+@@ -1096,14 +1118,9 @@ namespace GitHub.Runner.Listener
              }
              finally
              {
@@ -559,7 +551,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
                  }
  
                  configurationStore.ClearActiveRunnerSettings();
-@@ -1126,19 +1143,20 @@ private IMessageListener CreateMultiRepoListener(RunnerProfile profile)
+@@ -1126,19 +1143,20 @@ namespace GitHub.Runner.Listener
              return listener;
          }
  
@@ -583,7 +575,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
                  {
                      var dispatched = await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
                      return (dispatched == null, dispatched);
-@@ -1154,10 +1172,16 @@ private IMessageListener CreateMultiRepoListener(RunnerProfile profile)
+@@ -1154,10 +1172,16 @@ namespace GitHub.Runner.Listener
  
              if (string.Equals(message.MessageType, JobCancelMessage.MessageType, StringComparison.OrdinalIgnoreCase))
              {
@@ -602,7 +594,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
                  }
  
                  return (true, null);
-@@ -1186,7 +1210,7 @@ private IMessageListener CreateMultiRepoListener(RunnerProfile profile)
+@@ -1186,7 +1210,7 @@ namespace GitHub.Runner.Listener
              return (true, null);
          }
  
@@ -611,7 +603,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
              RepositoryListenerContext context,
              IReadOnlyList<RepositoryListenerContext> listenerContexts,
              IConfigurationStore configurationStore,
-@@ -1207,18 +1231,25 @@ await HandleMultiRepoMessageAsync(
+@@ -1207,18 +1231,25 @@ namespace GitHub.Runner.Listener
                          message,
                          listenerContexts,
                          new MultiRepoPendingScheduler(),
@@ -640,7 +632,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
              RepositoryListenerContext context,
              TaskAgentMessage message,
              IReadOnlyList<RepositoryListenerContext> listenerContexts,
-@@ -1249,15 +1280,45 @@ private async Task<IJobDispatcher> TryDispatchBrokerMessageAsync(
+@@ -1249,15 +1280,51 @@ namespace GitHub.Runner.Listener
              configurationStore.SetActiveRunnerSettings(context.Profile.Settings);
  
              var jobDispatcher = HostContext.CreateService<IJobDispatcher>();
@@ -667,6 +659,12 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
 +                await activeDispatcher.Dispatcher.WaitAsync(CancellationToken.None);
 +                await activeDispatcher.Dispatcher.ShutdownAsync();
 +                activeDispatchers.RemoveAt(index);
++                if (activeDispatcher.Context.PollTask == null && !activeDispatcher.Context.PendingWork)
++                {
++                    Trace.Info($"Restarting message polling for profile '{activeDispatcher.Context.Profile.Name}' after job completion.");
++                    activeDispatcher.Context.PollTask = activeDispatcher.Context.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
++                }
++
 +                if (!activeDispatchers.Any(x => string.Equals(x.Context.Profile.Name, activeDispatcher.Context.Profile.Name, StringComparison.OrdinalIgnoreCase)))
 +                {
 +                    BroadcastMultiRepoJobStatus(activeDispatcher.Context, TaskAgentStatus.Online);
@@ -690,7 +688,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
          private async Task<Pipelines.AgentJobRequestMessage> AcquireJobMessageAsync(
              RunnerProfile profile,
              RunnerJobRequestRef messageRef,
-@@ -1510,6 +1575,7 @@ private void PrintUsage(CommandSettings command)
+@@ -1510,6 +1577,7 @@ namespace GitHub.Runner.Listener
              _term.WriteLine($@"
  Commands:
   .{separator}config.{ext}         Configures the runner
@@ -698,7 +696,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
   .{separator}config.{ext} remove  Unconfigures the runner
   .{separator}run.{ext}            Runs the runner interactively. Does not require any options.
  
-@@ -1532,7 +1598,8 @@ private void PrintUsage(CommandSettings command)
+@@ -1532,7 +1600,8 @@ Config Options:
   --replace              Replace any existing runner with the same name (default false)
   --pat                  GitHub personal access token with repo scope. Used for checking network connectivity when executing `.{separator}run.{ext} --check`
   --disableupdate        Disable self-hosted runner automatic update to the latest released version`
@@ -708,7 +706,7 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
  
  #if OS_WINDOWS
      _term.WriteLine($@" --runasservice   Run the runner as a service");
-@@ -1549,6 +1616,8 @@ private void PrintUsage(CommandSettings command)
+@@ -1549,6 +1618,8 @@ Examples:
    .{separator}config.{ext} --unattended --url <url> --token <token> --replace [--name <name>]
   Configure a runner non-interactively with three extra labels:
    .{separator}config.{ext} --unattended --url <url> --token <token> --labels L1,L2,L3");
@@ -718,9 +716,10 @@ diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
      _term.WriteLine($@" Configure a runner to run as a service:");
      _term.WriteLine($@"  .{separator}config.{ext} --url <url> --token <token> --runasservice");
 diff --git a/src/Runner.Worker/Container/DockerCommandManager.cs b/src/Runner.Worker/Container/DockerCommandManager.cs
+index 41b914a..a93ac18 100644
 --- a/src/Runner.Worker/Container/DockerCommandManager.cs
 +++ b/src/Runner.Worker/Container/DockerCommandManager.cs
-@@ -47,7 +47,7 @@ public override void Initialize(IHostContext hostContext)
+@@ -47,7 +47,7 @@ namespace GitHub.Runner.Worker.Container
          {
              base.Initialize(hostContext);
              DockerPath = WhichUtil.Which("docker", true, Trace);
@@ -730,6 +729,7 @@ diff --git a/src/Runner.Worker/Container/DockerCommandManager.cs b/src/Runner.Wo
              DockerInstanceLabel = IOUtil.GetSha256Hash(json).Substring(0, 6);
          }
 diff --git a/src/Test/L0/Listener/CommandSettingsL0.cs b/src/Test/L0/Listener/CommandSettingsL0.cs
+index af73f95..c263694 100644
 --- a/src/Test/L0/Listener/CommandSettingsL0.cs
 +++ b/src/Test/L0/Listener/CommandSettingsL0.cs
 @@ -2,6 +2,7 @@
@@ -740,7 +740,7 @@ diff --git a/src/Test/L0/Listener/CommandSettingsL0.cs b/src/Test/L0/Listener/Co
  using System.Runtime.CompilerServices;
  using Xunit;
  
-@@ -312,6 +313,82 @@ public void GetsProfileArg()
+@@ -312,6 +313,82 @@ namespace GitHub.Runner.Common.Tests
              }
          }
  
@@ -823,7 +823,7 @@ diff --git a/src/Test/L0/Listener/CommandSettingsL0.cs b/src/Test/L0/Listener/Co
          [Fact]
          [Trait("Level", "L0")]
          [Trait("Category", nameof(CommandSettings))]
-@@ -899,6 +976,7 @@ public void ValidateGoodFlagCommandCombination(string validCommand, string flag)
+@@ -899,6 +976,7 @@ namespace GitHub.Runner.Common.Tests
          [InlineData("configure", "work", "good arg value")]
          [InlineData("remove", "token", "good arg value")]
          [InlineData("remove", "pat", "good arg value")]
@@ -832,6 +832,7 @@ diff --git a/src/Test/L0/Listener/CommandSettingsL0.cs b/src/Test/L0/Listener/Co
          [Trait("Level", "L0")]
          [Trait("Category", nameof(CommandSettings))]
 diff --git a/src/Test/L0/Listener/Configuration/ConfigurationManagerL0.cs b/src/Test/L0/Listener/Configuration/ConfigurationManagerL0.cs
+index 3c698fd..f67263b 100644
 --- a/src/Test/L0/Listener/Configuration/ConfigurationManagerL0.cs
 +++ b/src/Test/L0/Listener/Configuration/ConfigurationManagerL0.cs
 @@ -2,10 +2,12 @@
@@ -847,7 +848,7 @@ diff --git a/src/Test/L0/Listener/Configuration/ConfigurationManagerL0.cs b/src/
  using System.Linq;
  using System.Runtime.CompilerServices;
  using System.Security.Cryptography;
-@@ -447,5 +449,32 @@ public async Task ConfigureRunnerServiceFailsOnUnsupportedPlatforms()
+@@ -447,5 +449,32 @@ namespace GitHub.Runner.Common.Tests.Listener.Configuration
              }
          }
  #endif
@@ -881,9 +882,10 @@ diff --git a/src/Test/L0/Listener/Configuration/ConfigurationManagerL0.cs b/src/
      }
  }
 diff --git a/src/Test/L0/Listener/JobDispatcherL0.cs b/src/Test/L0/Listener/JobDispatcherL0.cs
+index a160ffb..11f22e7 100644
 --- a/src/Test/L0/Listener/JobDispatcherL0.cs
 +++ b/src/Test/L0/Listener/JobDispatcherL0.cs
-@@ -23,6 +23,7 @@ public sealed class JobDispatcherL0
+@@ -23,6 +23,7 @@ namespace GitHub.Runner.Common.Tests.Listener
          private Mock<IProcessChannel> _processChannel;
          private Mock<IProcessInvoker> _processInvoker;
          private Mock<IRunnerServer> _runnerServer;
@@ -891,7 +893,7 @@ diff --git a/src/Test/L0/Listener/JobDispatcherL0.cs b/src/Test/L0/Listener/JobD
  
          private Mock<IRunServer> _runServer;
          private Mock<IConfigurationStore> _configurationStore;
-@@ -32,6 +33,7 @@ public JobDispatcherL0()
+@@ -32,6 +33,7 @@ namespace GitHub.Runner.Common.Tests.Listener
              _processChannel = new Mock<IProcessChannel>();
              _processInvoker = new Mock<IProcessInvoker>();
              _runnerServer = new Mock<IRunnerServer>();
@@ -899,7 +901,7 @@ diff --git a/src/Test/L0/Listener/JobDispatcherL0.cs b/src/Test/L0/Listener/JobD
              _runServer = new Mock<IRunServer>();
              _configurationStore = new Mock<IConfigurationStore>();
          }
-@@ -60,6 +62,7 @@ public async void DispatchesJobRequest(string billingOwnerId)
+@@ -60,6 +62,7 @@ namespace GitHub.Runner.Common.Tests.Listener
                  var jobDispatcher = new JobDispatcher();
                  hc.SetSingleton<IConfigurationStore>(_configurationStore.Object);
                  hc.SetSingleton<IRunnerServer>(_runnerServer.Object);
@@ -907,7 +909,7 @@ diff --git a/src/Test/L0/Listener/JobDispatcherL0.cs b/src/Test/L0/Listener/JobD
  
                  hc.EnqueueInstance<IProcessChannel>(_processChannel.Object);
                  hc.EnqueueInstance<IProcessInvoker>(_processInvoker.Object);
-@@ -99,6 +102,68 @@ public async void DispatchesJobRequest(string billingOwnerId)
+@@ -99,6 +102,68 @@ namespace GitHub.Runner.Common.Tests.Listener
              }
          }
  
@@ -977,9 +979,10 @@ diff --git a/src/Test/L0/Listener/JobDispatcherL0.cs b/src/Test/L0/Listener/JobD
          [Trait("Level", "L0")]
          [Trait("Category", "Runner")]
 diff --git a/src/Test/L0/TestHostContext.cs b/src/Test/L0/TestHostContext.cs
+index c1cf692..031b93e 100644
 --- a/src/Test/L0/TestHostContext.cs
 +++ b/src/Test/L0/TestHostContext.cs
-@@ -249,60 +249,66 @@ public string GetDirectory(WellKnownDirectory directory)
+@@ -249,60 +249,66 @@ namespace GitHub.Runner.Common.Tests
  
          public string GetConfigFile(WellKnownConfigFile configFile)
          {
@@ -1055,7 +1058,7 @@ diff --git a/src/Test/L0/TestHostContext.cs b/src/Test/L0/TestHostContext.cs
                          ".certificates");
                      break;
  
-@@ -314,7 +320,7 @@ public string GetConfigFile(WellKnownConfigFile configFile)
+@@ -314,7 +320,7 @@ namespace GitHub.Runner.Common.Tests
  
                  case WellKnownConfigFile.SetupInfo:
                      path = Path.Combine(
@@ -1064,4 +1067,3 @@ diff --git a/src/Test/L0/TestHostContext.cs b/src/Test/L0/TestHostContext.cs
                          ".setup_info");
                      break;
  
-

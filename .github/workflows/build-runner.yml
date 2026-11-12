@@ -14,7 +14,7 @@ on:
         default: ""
         type: string
       rebuild_existing_release:
-        description: Replace assets on an existing GitHub Release
+        description: Replace release assets and move the release tag to the rebuilt source commit
         required: false
         default: false
         type: boolean
@@ -113,6 +113,8 @@ jobs:
 
           release_tag="v${version}"
           release_title="${release_tag}"
+          target_commit=$(git rev-parse HEAD)
+          release_notes="Patched GitHub Actions runner built from ${target_commit} (source ref: ${{ inputs.source_ref || github.ref_name }})."
 
           if gh release view "${release_tag}" >/dev/null 2>&1; then
             if [[ '${{ inputs.rebuild_existing_release }}' != 'true' ]]; then
@@ -123,14 +125,47 @@ jobs:
             existing_release=true
           else
             gh release create "${release_tag}" \
-              --target "$(git rev-parse HEAD)" \
+              --target "${target_commit}" \
               --title "${release_title}" \
-              --notes "Patched GitHub Actions runner built from $(git rev-parse HEAD) (source ref: ${{ inputs.source_ref || github.ref_name }})." \
+              --notes "${release_notes}" \
               --latest=false
             existing_release=false
           fi
 
           gh release upload "${release_tag}" release-assets/* --clobber
+
+          if [[ "${existing_release}" == "true" ]]; then
+            # Replacing assets alone leaves GitHub's source archives attached to the old tag commit.
+            git tag --force "${release_tag}" "${target_commit}"
+            git push --force origin "refs/tags/${release_tag}"
+            gh release edit "${release_tag}" \
+              --target "${target_commit}" \
+              --title "${release_title}" \
+              --notes "${release_notes}"
+          fi
+
+          published_tag_commit=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${release_tag}" --jq '.object.sha')
+          if [[ "${published_tag_commit}" != "${target_commit}" ]]; then
+            echo "Release tag ${release_tag} points to ${published_tag_commit}, expected ${target_commit}." >&2
+            exit 1
+          fi
+
+          expected_asset_count=$(find release-assets -maxdepth 1 -type f | wc -l)
+          published_assets=$(gh release view "${release_tag}" --json assets --jq '.assets[].name')
+          published_asset_count=$(printf '%s\n' "${published_assets}" | sed '/^$/d' | wc -l)
+          if [[ "${published_asset_count}" -lt "${expected_asset_count}" ]]; then
+            echo "Release ${release_tag} has ${published_asset_count} assets; expected at least ${expected_asset_count}." >&2
+            exit 1
+          fi
+          for asset_path in release-assets/*; do
+            asset_name=${asset_path##*/}
+            if ! grep -Fxq "${asset_name}" <<<"${published_assets}"; then
+              echo "Release ${release_tag} is missing rebuilt asset ${asset_name}." >&2
+              exit 1
+            fi
+          done
+
+          echo "Release ${release_tag} now points to ${target_commit} and has ${published_asset_count} assets."
 
           printf 'release_tag=%s\n' "${release_tag}" >> "${GITHUB_OUTPUT}"
           printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
