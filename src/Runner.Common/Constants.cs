@@ -98,6 +98,7 @@ namespace GitHub.Runner.Common
                     public static readonly string Labels = "labels";
                     public static readonly string MonitorSocketAddress = "monitorsocketaddress";
                     public static readonly string Name = "name";
+                    public static readonly string Profile = "profile";
                     public static readonly string RunnerGroup = "runnergroup";
                     public static readonly string StartupType = "startuptype";
                     public static readonly string Url = "url";
@@ -121,7 +122,9 @@ namespace GitHub.Runner.Common
 
                 public static class Commands
                 {
+                    public static readonly string Add = "add";
                     public static readonly string Configure = "configure";
+                    public static readonly string List = "list";
                     public static readonly string Remove = "remove";
                     public static readonly string Run = "run";
                     public static readonly string Warmup = "warmup";

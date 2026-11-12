@@ -43,6 +43,7 @@ namespace GitHub.Runner.Listener
                     Constants.Runner.CommandLine.Args.Labels,
                     Constants.Runner.CommandLine.Args.MonitorSocketAddress,
                     Constants.Runner.CommandLine.Args.Name,
+                    Constants.Runner.CommandLine.Args.Profile,
                     Constants.Runner.CommandLine.Args.PAT,
                     Constants.Runner.CommandLine.Args.RunnerGroup,
                     Constants.Runner.CommandLine.Args.Token,
@@ -52,13 +53,38 @@ namespace GitHub.Runner.Listener
                     Constants.Runner.CommandLine.Args.WindowsLogonPassword,
                     Constants.Runner.CommandLine.Args.Work
                 },
+            [Constants.Runner.CommandLine.Commands.Add] =
+                new string[]
+                {
+                    Constants.Runner.CommandLine.Flags.DisableUpdate,
+                    Constants.Runner.CommandLine.Flags.Ephemeral,
+                    Constants.Runner.CommandLine.Flags.Replace,
+                    Constants.Runner.CommandLine.Flags.Unattended,
+                    Constants.Runner.CommandLine.Flags.NoDefaultLabels,
+                    Constants.Runner.CommandLine.Args.Auth,
+                    Constants.Runner.CommandLine.Args.Labels,
+                    Constants.Runner.CommandLine.Args.MonitorSocketAddress,
+                    Constants.Runner.CommandLine.Args.Name,
+                    Constants.Runner.CommandLine.Args.Profile,
+                    Constants.Runner.CommandLine.Args.PAT,
+                    Constants.Runner.CommandLine.Args.RunnerGroup,
+                    Constants.Runner.CommandLine.Args.Token,
+                    Constants.Runner.CommandLine.Args.Url,
+                    Constants.Runner.CommandLine.Args.UserName,
+                    Constants.Runner.CommandLine.Args.Work
+                },
             // Valid remove flags and args
             [Constants.Runner.CommandLine.Commands.Remove] =
                 new string[]
                 {
+                    Constants.Runner.CommandLine.Args.Profile,
                     Constants.Runner.CommandLine.Args.Token,
                     Constants.Runner.CommandLine.Args.PAT,
                     Constants.Runner.CommandLine.Flags.Local
+                },
+            [Constants.Runner.CommandLine.Commands.List] =
+                new string[]
+                {
                 },
             // Valid run flags and args
             [Constants.Runner.CommandLine.Commands.Run] =
@@ -74,8 +100,10 @@ namespace GitHub.Runner.Listener
         };
 
         // Commands.
+        public bool Add => TestCommand(Constants.Runner.CommandLine.Commands.Add);
         public bool Configure => TestCommand(Constants.Runner.CommandLine.Commands.Configure);
         public bool Remove => TestCommand(Constants.Runner.CommandLine.Commands.Remove);
+        public bool List => TestCommand(Constants.Runner.CommandLine.Commands.List);
         public bool Run => TestCommand(Constants.Runner.CommandLine.Commands.Run);
         public bool Warmup => TestCommand(Constants.Runner.CommandLine.Commands.Warmup);
 
@@ -168,13 +196,21 @@ namespace GitHub.Runner.Listener
         {
             string command = string.Empty;
 
-            if (Configure)
+            if (Add)
+            {
+                command = Constants.Runner.CommandLine.Commands.Add;
+            }
+            else if (Configure)
             {
                 command = Constants.Runner.CommandLine.Commands.Configure;
             }
             else if (Remove)
             {
                 command = Constants.Runner.CommandLine.Commands.Remove;
+            }
+            else if (List)
+            {
+                command = Constants.Runner.CommandLine.Commands.List;
             }
             else if (Run)
             {
@@ -232,6 +268,11 @@ namespace GitHub.Runner.Listener
                 description: "Enter the name of runner:",
                 defaultValue: Environment.MachineName ?? "myrunner",
                 validator: Validators.NonEmptyValidator);
+        }
+
+        public string GetProfileName()
+        {
+            return GetArg(Constants.Runner.CommandLine.Args.Profile);
         }
 
         public string GetRunnerGroupName(string defaultPoolName = null)
