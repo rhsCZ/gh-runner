@@ -6,15 +6,19 @@ using System.Collections.Generic;
 using System.Linq;
 using GitHub.Runner.Common;
 using GitHub.Runner.Sdk;
+using System.IO;
 
 namespace GitHub.Runner.Listener
 {
     public sealed class CommandSettings
     {
+        private readonly IHostContext _context;
         private readonly Dictionary<string, string> _envArgs = new(StringComparer.OrdinalIgnoreCase);
         private readonly CommandLineParser _parser;
         private readonly IPromptManager _promptManager;
         private readonly Tracing _trace;
+        private RunnerGlobalOptions _globalOptions;
+        private bool _globalOptionsLoaded;
 
         // Valid flags for all commands
         private readonly string[] genericOptions =
@@ -92,7 +96,13 @@ namespace GitHub.Runner.Listener
                 {
                     Constants.Runner.CommandLine.Flags.Once,
                     Constants.Runner.CommandLine.Args.JitConfig,
+                    Constants.Runner.CommandLine.Args.MaxConcurrentJobs,
                     Constants.Runner.CommandLine.Args.StartupType
+                },
+            [Constants.Runner.CommandLine.Commands.Set] =
+                new string[]
+                {
+                    Constants.Runner.CommandLine.Args.MaxConcurrentJobs
                 },
             // valid warmup flags and args
             [Constants.Runner.CommandLine.Commands.Warmup] =
@@ -105,6 +115,7 @@ namespace GitHub.Runner.Listener
         public bool Remove => TestCommand(Constants.Runner.CommandLine.Commands.Remove);
         public bool List => TestCommand(Constants.Runner.CommandLine.Commands.List);
         public bool Run => TestCommand(Constants.Runner.CommandLine.Commands.Run);
+        public bool Set => TestCommand(Constants.Runner.CommandLine.Commands.Set);
         public bool Warmup => TestCommand(Constants.Runner.CommandLine.Commands.Warmup);
 
         // Flags.
@@ -126,6 +137,7 @@ namespace GitHub.Runner.Listener
         public CommandSettings(IHostContext context, string[] args)
         {
             ArgUtil.NotNull(context, nameof(context));
+            _context = context;
             _promptManager = context.GetService<IPromptManager>();
             _trace = context.GetTrace(nameof(CommandSettings));
 
@@ -215,6 +227,10 @@ namespace GitHub.Runner.Listener
             else if (Run)
             {
                 command = Constants.Runner.CommandLine.Commands.Run;
+            }
+            else if (Set)
+            {
+                command = Constants.Runner.CommandLine.Commands.Set;
             }
             else if (Warmup)
             {
@@ -382,6 +398,34 @@ namespace GitHub.Runner.Listener
             return GetArg(Constants.Runner.CommandLine.Args.StartupType);
         }
 
+        public int GetMaxConcurrentJobs()
+        {
+            var value = GetArg(Constants.Runner.CommandLine.Args.MaxConcurrentJobs);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                if (int.TryParse(value, out var parsed) && parsed > 0)
+                {
+                    return parsed;
+                }
+
+                _trace.Info($"Could not parse the argument value '{value}' for MaxConcurrentJobs. Defaulting to 1.");
+                return 1;
+            }
+
+            var configuredValue = LoadGlobalOptions().MaxConcurrentJobs;
+            if (configuredValue.HasValue && configuredValue.Value > 0)
+            {
+                return configuredValue.Value;
+            }
+
+            return 1;
+        }
+
+        public string GetMaxConcurrentJobsInput()
+        {
+            return GetArg(Constants.Runner.CommandLine.Args.MaxConcurrentJobs);
+        }
+
         public ISet<string> GetLabels()
         {
             var labelSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -518,6 +562,34 @@ namespace GitHub.Runner.Listener
             }
 
             return result;
+        }
+
+        private RunnerGlobalOptions LoadGlobalOptions()
+        {
+            if (_globalOptionsLoaded)
+            {
+                return _globalOptions ?? new RunnerGlobalOptions();
+            }
+
+            _globalOptionsLoaded = true;
+            var optionsFile = _context.GetConfigFile(WellKnownConfigFile.Options);
+            if (!File.Exists(optionsFile))
+            {
+                _globalOptions = new RunnerGlobalOptions();
+                return _globalOptions;
+            }
+
+            try
+            {
+                _globalOptions = IOUtil.LoadObject<RunnerGlobalOptions>(optionsFile) ?? new RunnerGlobalOptions();
+            }
+            catch (Exception ex)
+            {
+                _trace.Warning($"Failed to load shared runner options from '{optionsFile}'. {ex.Message}");
+                _globalOptions = new RunnerGlobalOptions();
+            }
+
+            return _globalOptions;
         }
     }
 }

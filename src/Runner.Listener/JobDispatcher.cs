@@ -26,6 +26,7 @@ namespace GitHub.Runner.Listener
         bool Busy { get; }
         TaskCompletionSource<TaskResult> RunOnceJobCompleted { get; }
         void Run(Pipelines.AgentJobRequestMessage message, bool runOnce = false);
+        void Run(Pipelines.AgentJobRequestMessage message, bool runOnce, string configDirectory);
         bool Cancel(JobCancelMessage message);
         Task WaitAsync(CancellationToken token);
         Task ShutdownAsync();
@@ -88,6 +89,11 @@ namespace GitHub.Runner.Listener
 
         public void Run(Pipelines.AgentJobRequestMessage jobRequestMessage, bool runOnce = false)
         {
+            Run(jobRequestMessage, runOnce, null);
+        }
+
+        public void Run(Pipelines.AgentJobRequestMessage jobRequestMessage, bool runOnce, string configDirectory)
+        {
             Trace.Info($"Job request {jobRequestMessage.RequestId} for plan {jobRequestMessage.Plan.PlanId} job {jobRequestMessage.JobId} received.");
 
             _isRunServiceJob = MessageUtil.IsRunServiceJob(jobRequestMessage.MessageType);
@@ -126,11 +132,11 @@ namespace GitHub.Runner.Listener
             if (runOnce)
             {
                 Trace.Info("Start dispatcher for one time used runner.");
-                newDispatch.WorkerDispatch = RunOnceAsync(jobRequestMessage, orchestrationId, currentDispatch, newDispatch.WorkerCancellationTokenSource.Token, newDispatch.WorkerCancelTimeoutKillTokenSource.Token);
+                newDispatch.WorkerDispatch = RunOnceAsync(jobRequestMessage, orchestrationId, currentDispatch, newDispatch.WorkerCancellationTokenSource.Token, newDispatch.WorkerCancelTimeoutKillTokenSource.Token, configDirectory);
             }
             else
             {
-                newDispatch.WorkerDispatch = RunAsync(jobRequestMessage, orchestrationId, currentDispatch, newDispatch.WorkerCancellationTokenSource.Token, newDispatch.WorkerCancelTimeoutKillTokenSource.Token);
+                newDispatch.WorkerDispatch = RunAsync(jobRequestMessage, orchestrationId, currentDispatch, newDispatch.WorkerCancellationTokenSource.Token, newDispatch.WorkerCancelTimeoutKillTokenSource.Token, configDirectory);
             }
 
             _jobInfos.TryAdd(newDispatch.JobId, newDispatch);
@@ -340,12 +346,12 @@ namespace GitHub.Runner.Listener
             }
         }
 
-        private async Task RunOnceAsync(Pipelines.AgentJobRequestMessage message, string orchestrationId, WorkerDispatcher previousJobDispatch, CancellationToken jobRequestCancellationToken, CancellationToken workerCancelTimeoutKillToken)
+        private async Task RunOnceAsync(Pipelines.AgentJobRequestMessage message, string orchestrationId, WorkerDispatcher previousJobDispatch, CancellationToken jobRequestCancellationToken, CancellationToken workerCancelTimeoutKillToken, string configDirectory)
         {
             var jobResult = TaskResult.Succeeded;
             try
             {
-                jobResult = await RunAsync(message, orchestrationId, previousJobDispatch, jobRequestCancellationToken, workerCancelTimeoutKillToken);
+                jobResult = await RunAsync(message, orchestrationId, previousJobDispatch, jobRequestCancellationToken, workerCancelTimeoutKillToken, configDirectory);
             }
             finally
             {
@@ -354,7 +360,7 @@ namespace GitHub.Runner.Listener
             }
         }
 
-        private async Task<TaskResult> RunAsync(Pipelines.AgentJobRequestMessage message, string orchestrationId, WorkerDispatcher previousJobDispatch, CancellationToken jobRequestCancellationToken, CancellationToken workerCancelTimeoutKillToken)
+        private async Task<TaskResult> RunAsync(Pipelines.AgentJobRequestMessage message, string orchestrationId, WorkerDispatcher previousJobDispatch, CancellationToken jobRequestCancellationToken, CancellationToken workerCancelTimeoutKillToken, string configDirectory)
         {
             Busy = true;
             try
@@ -474,11 +480,20 @@ namespace GitHub.Runner.Listener
                                 HostContext.WritePerfCounter("StartingWorkerProcess");
                                 var assemblyDirectory = HostContext.GetDirectory(WellKnownDirectory.Bin);
                                 string workerFileName = Path.Combine(assemblyDirectory, _workerProcessName);
+                                Dictionary<string, string> workerEnvironment = null;
+                                if (!string.IsNullOrWhiteSpace(configDirectory))
+                                {
+                                    workerEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                                    {
+                                        [Constants.Variables.Agent.ConfigDirectory] = configDirectory,
+                                    };
+                                }
+
                                 workerProcessTask = processInvoker.ExecuteAsync(
                                     workingDirectory: assemblyDirectory,
                                     fileName: workerFileName,
                                     arguments: "spawnclient " + pipeHandleOut + " " + pipeHandleIn,
-                                    environment: null,
+                                    environment: workerEnvironment,
                                     requireExitCodeZero: false,
                                     outputEncoding: null,
                                     killProcessOnCancel: true,

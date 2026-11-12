@@ -444,60 +444,61 @@ namespace GitHub.Runner.Common
 
         public string GetConfigFile(WellKnownConfigFile configFile)
         {
+            string configRoot = GetConfigRootDirectory();
             string path;
             switch (configFile)
             {
                 case WellKnownConfigFile.Runner:
                     path = Path.Combine(
-                        GetDirectory(WellKnownDirectory.Root),
+                        configRoot,
                         ".runner");
                     break;
 
                 case WellKnownConfigFile.MigratedRunner:
                     path = Path.Combine(
-                        GetDirectory(WellKnownDirectory.Root),
+                        configRoot,
                         ".runner_migrated");
                     break;
 
                 case WellKnownConfigFile.Credentials:
                     path = Path.Combine(
-                        GetDirectory(WellKnownDirectory.Root),
+                        configRoot,
                         ".credentials");
                     break;
 
                 case WellKnownConfigFile.MigratedCredentials:
                     path = Path.Combine(
-                        GetDirectory(WellKnownDirectory.Root),
+                        configRoot,
                         ".credentials_migrated");
                     break;
 
                 case WellKnownConfigFile.RSACredentials:
                     path = Path.Combine(
-                        GetDirectory(WellKnownDirectory.Root),
+                        configRoot,
                         ".credentials_rsaparams");
                     break;
 
                 case WellKnownConfigFile.Service:
                     path = Path.Combine(
-                        GetDirectory(WellKnownDirectory.Root),
+                        configRoot,
                         ".service");
                     break;
 
                 case WellKnownConfigFile.CredentialStore:
 #if OS_OSX
                     path = Path.Combine(
-                        GetDirectory(WellKnownDirectory.Root),
+                        configRoot,
                         ".credential_store.keychain");
 #else
                     path = Path.Combine(
-                        GetDirectory(WellKnownDirectory.Root),
+                        configRoot,
                         ".credential_store");
 #endif
                     break;
 
                 case WellKnownConfigFile.Certificates:
                     path = Path.Combine(
-                        GetDirectory(WellKnownDirectory.Root),
+                        configRoot,
                         ".certificates");
                     break;
 
@@ -509,7 +510,7 @@ namespace GitHub.Runner.Common
 
                 case WellKnownConfigFile.SetupInfo:
                     path = Path.Combine(
-                        GetDirectory(WellKnownDirectory.Root),
+                        configRoot,
                         ".setup_info");
                     break;
 
@@ -525,6 +526,17 @@ namespace GitHub.Runner.Common
 
             _trace.Info($"Well known config file '{configFile}': '{path}'");
             return path;
+        }
+
+        private string GetConfigRootDirectory()
+        {
+            var configRoot = Environment.GetEnvironmentVariable(Constants.Variables.Agent.ConfigDirectory);
+            if (!string.IsNullOrWhiteSpace(configRoot))
+            {
+                return configRoot;
+            }
+
+            return GetDirectory(WellKnownDirectory.Root);
         }
 
         public Tracing GetTrace(string name)

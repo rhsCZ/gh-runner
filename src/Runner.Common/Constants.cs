@@ -96,6 +96,7 @@ namespace GitHub.Runner.Common
                 {
                     public static readonly string Auth = "auth";
                     public static readonly string Labels = "labels";
+                    public static readonly string MaxConcurrentJobs = "maxconcurrentjobs";
                     public static readonly string MonitorSocketAddress = "monitorsocketaddress";
                     public static readonly string Name = "name";
                     public static readonly string Profile = "profile";
@@ -127,6 +128,7 @@ namespace GitHub.Runner.Common
                     public static readonly string List = "list";
                     public static readonly string Remove = "remove";
                     public static readonly string Run = "run";
+                    public static readonly string Set = "set";
                     public static readonly string Warmup = "warmup";
                 }
 
@@ -330,6 +332,7 @@ namespace GitHub.Runner.Common
                 public static readonly string ActionArchiveCacheDirectory = "ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE";
                 public static readonly string SymlinkCachedActions = "ACTIONS_RUNNER_SYMLINK_CACHED_ACTIONS";
                 public static readonly string EmitCompositeMarkers = "ACTIONS_RUNNER_EMIT_COMPOSITE_MARKERS";
+                public static readonly string ConfigDirectory = "ACTIONS_RUNNER_CONFIG_DIRECTORY";
             }
 
             public static class System
