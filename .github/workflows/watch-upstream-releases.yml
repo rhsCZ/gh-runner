@@ -1,0 +1,90 @@
+name: Watch Upstream Runner Releases
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional upstream release tag, for example v2.337.0
+        required: false
+        default: ""
+      target_branch:
+        description: Optional local target branch override
+        required: false
+        default: ""
+      rebuild_existing_release:
+        description: Re-import upstream, apply current patches, rebuild, replace assets, and move the release tag
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: watch-upstream-releases
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Checkout orchestration branch
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Check upstream release state
+        id: upstream
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || '' }}
+          TARGET_BRANCH: ${{ github.event.inputs.target_branch || '' }}
+        run: |
+          scripts/watch-upstream-releases.sh \
+            --release-tag "${RELEASE_TAG}" \
+            --target-branch "${TARGET_BRANCH}"
+
+      - name: Require rebuild option for an existing release
+        if: ${{ github.event_name == 'workflow_dispatch' && steps.upstream.outputs.release_exists == 'true' && !inputs.rebuild_existing_release }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.upstream.outputs.release_tag }}
+        run: |
+          echo "Release ${RELEASE_TAG} already exists. Enable rebuild_existing_release to replace it." >&2
+          exit 1
+
+      - name: Import source history and apply local commits
+        if: ${{ steps.upstream.outputs.needs_import == 'true' || inputs.rebuild_existing_release }}
+        shell: bash
+        run: |
+          scripts/import-upstream-history.sh \
+            --branch "${{ steps.upstream.outputs.upstream_branch }}" \
+            --target-branch "${{ steps.upstream.outputs.target_branch }}" \
+            --control-ref master
+
+      - name: Push imported branch
+        if: ${{ steps.upstream.outputs.needs_import == 'true' || inputs.rebuild_existing_release }}
+        shell: bash
+        run: git push --force-with-lease origin "${{ steps.upstream.outputs.target_branch }}:${{ steps.upstream.outputs.target_branch }}"
+
+      - name: Dispatch build workflow
+        if: ${{ (steps.upstream.outputs.needs_build == 'true' && steps.upstream.outputs.release_exists == 'false') || inputs.rebuild_existing_release }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          args=(--ref "${{ steps.upstream.outputs.target_branch }}")
+          if [[ '${{ inputs.rebuild_existing_release }}' == 'true' ]]; then
+            args+=(--field "source_ref=${{ steps.upstream.outputs.target_branch }}")
+            args+=(--field "rebuild_existing_release=true")
+          fi
+          gh workflow run build-runner.yml "${args[@]}"

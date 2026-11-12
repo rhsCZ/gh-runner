@@ -1,0 +1,1801 @@
+# Multi-repository runner support and Windows fixes
+# Source commit: 430a03bdddeb8f0728e1fbd6ba4d2f5325a80c23
+# Generated from rhsCZ/runner; upstream workflow files are intentionally excluded.
+
+diff --git a/docs/multi-repo-local-test.md b/docs/multi-repo-local-test.md
+new file mode 100644
+--- /dev/null
++++ b/docs/multi-repo-local-test.md
+@@ -0,0 +1,92 @@
++# Multi-Repo Runner Build And Test
++
++This document describes how to build this runner fork, install it on a Linux host, and validate multi-repository dispatch with three repositories.
++
++## Build
++
++From the repository root:
++
++```bash
++cd /opt/gh-runner/src
++bash dev.sh build Debug
++bash dev.sh layout Debug
++bash dev.sh package Debug
++```
++
++The packaged runner archive will be created under:
++
++```text
++/opt/gh-runner/_package/
++```
++
++The unpacked runnable layout will be available under:
++
++```text
++/opt/gh-runner/_layout/
++```
++
++## Install On A Host
++
++Copy or extract the packaged runner to the target machine, then:
++
++```bash
++cd /srv/github-runner
++tar -xzf actions-runner-*.tar.gz
++./bin/installdependencies.sh
++```
++
++If migrating an already configured single-repository runner, run the migration script from the source checkout root while that checkout points at the installed runner directory, or copy the script into the installed runner root first:
++
++```bash
++cd /opt/gh-runner
++./scripts/migrate-root-runner-to-profile.sh default
++```
++
++Register three repository profiles on the same runner directory:
++
++```bash
++./config.sh add --profile repo-a --url https://github.com/USER/repo-a --token TOKEN_A --name multi-repo-host --labels multi-repo-test
++./config.sh add --profile repo-b --url https://github.com/USER/repo-b --token TOKEN_B --name multi-repo-host --labels multi-repo-test
++./config.sh add --profile repo-c --url https://github.com/USER/repo-c --token TOKEN_C --name multi-repo-host --labels multi-repo-test
++./config.sh list
++```
++
++Start the runner:
++
++```bash
++./run.sh
++```
++
++For service mode after configuration:
++
++```bash
++sudo ./svc.sh install
++sudo ./svc.sh start
++sudo ./svc.sh status
++```
++
++## Expected Test Behavior
++
++Use the workflow samples in `examples/multi-repo-workflows/`.
++
++Trigger the workflows in quick succession in this order:
++
++1. `repo-a`
++2. `repo-b`
++3. `repo-c`
++
++Expected outcome:
++
++1. all three repositories match the same self-hosted runner label
++2. only one job runs at a time on the machine
++3. the remaining jobs wait
++4. after `repo-a` finishes, `repo-b` starts
++5. after `repo-b` finishes, `repo-c` starts
++
++To observe ordering, watch:
++
++```text
++_diag/Runner_*.log
++```
++
++and the workflow logs in GitHub Actions UI.
+diff --git a/examples/multi-repo-workflows/repo-a-dispatch-test.yml b/examples/multi-repo-workflows/repo-a-dispatch-test.yml
+new file mode 100644
+--- /dev/null
++++ b/examples/multi-repo-workflows/repo-a-dispatch-test.yml
+@@ -0,0 +1,23 @@
++name: repo-a-dispatch-test
++
++on:
++  workflow_dispatch:
++
++jobs:
++  repo-a-job:
++    runs-on:
++      - self-hosted
++      - multi-repo-test
++    steps:
++      - name: Show repository context
++        run: |
++          echo "repository=${GITHUB_REPOSITORY}"
++          echo "run_id=${GITHUB_RUN_ID}"
++          echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
++          echo "runner_name=${RUNNER_NAME}"
++          date -u
++      - name: Simulate long-running work
++        run: |
++          echo "repo-a start"
++          sleep 45
++          echo "repo-a done"
+diff --git a/examples/multi-repo-workflows/repo-b-dispatch-test.yml b/examples/multi-repo-workflows/repo-b-dispatch-test.yml
+new file mode 100644
+--- /dev/null
++++ b/examples/multi-repo-workflows/repo-b-dispatch-test.yml
+@@ -0,0 +1,23 @@
++name: repo-b-dispatch-test
++
++on:
++  workflow_dispatch:
++
++jobs:
++  repo-b-job:
++    runs-on:
++      - self-hosted
++      - multi-repo-test
++    steps:
++      - name: Show repository context
++        run: |
++          echo "repository=${GITHUB_REPOSITORY}"
++          echo "run_id=${GITHUB_RUN_ID}"
++          echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
++          echo "runner_name=${RUNNER_NAME}"
++          date -u
++      - name: Simulate long-running work
++        run: |
++          echo "repo-b start"
++          sleep 45
++          echo "repo-b done"
+diff --git a/examples/multi-repo-workflows/repo-c-dispatch-test.yml b/examples/multi-repo-workflows/repo-c-dispatch-test.yml
+new file mode 100644
+--- /dev/null
++++ b/examples/multi-repo-workflows/repo-c-dispatch-test.yml
+@@ -0,0 +1,23 @@
++name: repo-c-dispatch-test
++
++on:
++  workflow_dispatch:
++
++jobs:
++  repo-c-job:
++    runs-on:
++      - self-hosted
++      - multi-repo-test
++    steps:
++      - name: Show repository context
++        run: |
++          echo "repository=${GITHUB_REPOSITORY}"
++          echo "run_id=${GITHUB_RUN_ID}"
++          echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
++          echo "runner_name=${RUNNER_NAME}"
++          date -u
++      - name: Simulate long-running work
++        run: |
++          echo "repo-c start"
++          sleep 45
++          echo "repo-c done"
+diff --git a/scripts/migrate-root-runner-to-profile.sh b/scripts/migrate-root-runner-to-profile.sh
+new file mode 100644
+--- /dev/null
++++ b/scripts/migrate-root-runner-to-profile.sh
+@@ -0,0 +1,36 @@
++#!/usr/bin/env bash
++
++set -euo pipefail
++
++ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++TARGET_PROFILE="${1:-default}"
++TARGET_DIR="${ROOT_DIR}/.runner.d/${TARGET_PROFILE}"
++
++FILES=(
++  ".runner"
++  ".credentials"
++  ".credentials_rsaparams"
++  ".runner_migrated"
++  ".credentials_migrated"
++)
++
++if [[ ! -f "${ROOT_DIR}/.runner" || ! -f "${ROOT_DIR}/.credentials" ]]; then
++  echo "Root runner configuration was not found. Expected '${ROOT_DIR}/.runner' and '${ROOT_DIR}/.credentials'."
++  exit 1
++fi
++
++if [[ -e "${TARGET_DIR}" ]]; then
++  echo "Target profile '${TARGET_PROFILE}' already exists at '${TARGET_DIR}'."
++  exit 1
++fi
++
++mkdir -p "${TARGET_DIR}"
++
++for file in "${FILES[@]}"; do
++  if [[ -f "${ROOT_DIR}/${file}" ]]; then
++    cp -p "${ROOT_DIR}/${file}" "${TARGET_DIR}/${file}"
++  fi
++done
++
++echo "Copied root runner configuration to '${TARGET_DIR}'."
++echo "Root files were left in place. After validating multi-repo mode, remove them manually if desired."
+diff --git a/src/Misc/layoutroot/config.cmd b/src/Misc/layoutroot/config.cmd
+--- a/src/Misc/layoutroot/config.cmd
++++ b/src/Misc/layoutroot/config.cmd
+@@ -18,6 +18,12 @@ if /i "%~1" equ "remove" (
+     rem Unconfigure the runner.
+     rem ********************************************************************************
+     "%~dp0bin\Runner.Listener.exe" %*
++) else if /i "%~1" equ "list" (
++    "%~dp0bin\Runner.Listener.exe" %*
++) else if /i "%~1" equ "add" (
++    "%~dp0bin\Runner.Listener.exe" %*
++) else if /i "%~1" equ "configure" (
++    "%~dp0bin\Runner.Listener.exe" %*
+ ) else (
+     rem ********************************************************************************
+     rem Configure the runner.
+diff --git a/src/Misc/layoutroot/config.sh b/src/Misc/layoutroot/config.sh
+--- a/src/Misc/layoutroot/config.sh
++++ b/src/Misc/layoutroot/config.sh
+@@ -74,7 +74,7 @@ cd "$DIR"
+ source ./env.sh
+ 
+ shopt -s nocasematch
+-if [[ "$1" == "remove" ]]; then
++if [[ "$1" == "remove" || "$1" == "list" || "$1" == "add" || "$1" == "configure" ]]; then
+     ./bin/Runner.Listener "$@"
+ else
+     ./bin/Runner.Listener configure "$@"
+diff --git a/src/Runner.Common/ConfigurationStore.cs b/src/Runner.Common/ConfigurationStore.cs
+--- a/src/Runner.Common/ConfigurationStore.cs
++++ b/src/Runner.Common/ConfigurationStore.cs
+@@ -171,6 +171,9 @@ public interface IConfigurationStore : IRunnerService
+         CredentialData GetMigratedCredentials();
+         RunnerSettings GetSettings();
+         RunnerSettings GetMigratedSettings();
++        void SetActiveRunnerSettings(RunnerSettings settings);
++        void ClearActiveRunnerSettings();
++        void Reset();
+         void SaveCredential(CredentialData credential);
+         void SaveMigratedCredential(CredentialData credential);
+         void SaveSettings(RunnerSettings settings);
+@@ -193,6 +196,7 @@ public sealed class ConfigurationStore : RunnerService, IConfigurationStore
+         private CredentialData _migratedCreds;
+         private RunnerSettings _settings;
+         private RunnerSettings _migratedSettings;
++        private RunnerSettings _activeSettingsOverride;
+ 
+         public override void Initialize(IHostContext hostContext)
+         {
+@@ -279,6 +283,11 @@ public CredentialData GetMigratedCredentials()
+ 
+         public RunnerSettings GetSettings()
+         {
++            if (_activeSettingsOverride != null)
++            {
++                return _activeSettingsOverride;
++            }
++
+             if (_settings == null)
+             {
+                 RunnerSettings configuredSettings = null;
+@@ -296,6 +305,25 @@ public RunnerSettings GetSettings()
+             return _settings;
+         }
+ 
++        public void SetActiveRunnerSettings(RunnerSettings settings)
++        {
++            _activeSettingsOverride = settings;
++        }
++
++        public void ClearActiveRunnerSettings()
++        {
++            _activeSettingsOverride = null;
++        }
++
++        public void Reset()
++        {
++            _creds = null;
++            _migratedCreds = null;
++            _settings = null;
++            _migratedSettings = null;
++            _activeSettingsOverride = null;
++        }
++
+         public RunnerSettings GetMigratedSettings()
+         {
+             if (_migratedSettings == null)
+diff --git a/src/Runner.Common/Constants.cs b/src/Runner.Common/Constants.cs
+--- a/src/Runner.Common/Constants.cs
++++ b/src/Runner.Common/Constants.cs
+@@ -98,6 +98,7 @@ public static class Args
+                     public static readonly string Labels = "labels";
+                     public static readonly string MonitorSocketAddress = "monitorsocketaddress";
+                     public static readonly string Name = "name";
++                    public static readonly string Profile = "profile";
+                     public static readonly string RunnerGroup = "runnergroup";
+                     public static readonly string StartupType = "startuptype";
+                     public static readonly string Url = "url";
+@@ -121,7 +122,9 @@ public static class Args
+ 
+                 public static class Commands
+                 {
++                    public static readonly string Add = "add";
+                     public static readonly string Configure = "configure";
++                    public static readonly string List = "list";
+                     public static readonly string Remove = "remove";
+                     public static readonly string Run = "run";
+                     public static readonly string Warmup = "warmup";
+diff --git a/src/Runner.Listener/BrokerMessageListener.cs b/src/Runner.Listener/BrokerMessageListener.cs
+--- a/src/Runner.Listener/BrokerMessageListener.cs
++++ b/src/Runner.Listener/BrokerMessageListener.cs
+@@ -41,6 +41,10 @@ public sealed class BrokerMessageListener : RunnerService, IMessageListener
+         private bool _isMigratedSettings = false;
+         private const int _maxMigratedSettingsRetries = 3;
+         private int _migratedSettingsRetryCount = 0;
++        private CredentialData _credentialData;
++        private IRunnerServer _runnerServerOverride;
++        private IBrokerServer _brokerServerOverride;
++        private string _profileRootPath;
+ 
+         public BrokerMessageListener()
+         {
+@@ -52,13 +56,29 @@ public BrokerMessageListener(RunnerSettings settings, bool isMigratedSettings =
+             _isMigratedSettings = isMigratedSettings;
+         }
+ 
++        public BrokerMessageListener(
++            RunnerSettings settings,
++            CredentialData credentialData,
++            IRunnerServer runnerServer,
++            IBrokerServer brokerServer,
++            string profileRootPath,
++            bool isMigratedSettings = false)
++        {
++            _settings = settings;
++            _credentialData = credentialData;
++            _runnerServerOverride = runnerServer;
++            _brokerServerOverride = brokerServer;
++            _profileRootPath = profileRootPath;
++            _isMigratedSettings = isMigratedSettings;
++        }
++
+         public override void Initialize(IHostContext hostContext)
+         {
+             base.Initialize(hostContext);
+ 
+             _term = HostContext.GetService<ITerminal>();
+-            _runnerServer = HostContext.GetService<IRunnerServer>();
+-            _brokerServer = HostContext.GetService<IBrokerServer>();
++            _runnerServer = _runnerServerOverride ?? HostContext.GetService<IRunnerServer>();
++            _brokerServer = _brokerServerOverride ?? HostContext.GetService<IBrokerServer>();
+             _credMgr = HostContext.GetService<ICredentialManager>();
+         }
+ 
+@@ -93,7 +113,9 @@ public async Task<CreateSessionResult> CreateSessionAsync(CancellationToken toke
+ 
+             // Create connection.
+             Trace.Info("Loading Credentials");
+-            _creds = _credMgr.LoadCredentials(allowAuthUrlV2: false);
++            _creds = _credentialData != null
++                ? ProfileCredentialFactory.Create(HostContext, _credentialData, allowAuthUrlV2: false, _profileRootPath)
++                : _credMgr.LoadCredentials(allowAuthUrlV2: false);
+ 
+             var agent = new TaskAgentReference
+             {
+@@ -116,7 +138,9 @@ public async Task<CreateSessionResult> CreateSessionAsync(CancellationToken toke
+                 try
+                 {
+                     Trace.Info("Connecting to the Broker Server...");
+-                    _credsV2 = _credMgr.LoadCredentials(allowAuthUrlV2: true);
++                    _credsV2 = _credentialData != null
++                        ? ProfileCredentialFactory.Create(HostContext, _credentialData, allowAuthUrlV2: true, _profileRootPath)
++                        : _credMgr.LoadCredentials(allowAuthUrlV2: true);
+                     await _brokerServer.ConnectAsync(new Uri(serverUrlV2), _credsV2);
+                     Trace.Info("VssConnection created");
+ 
+diff --git a/src/Runner.Listener/CommandSettings.cs b/src/Runner.Listener/CommandSettings.cs
+--- a/src/Runner.Listener/CommandSettings.cs
++++ b/src/Runner.Listener/CommandSettings.cs
+@@ -43,6 +43,7 @@ public sealed class CommandSettings
+                     Constants.Runner.CommandLine.Args.Labels,
+                     Constants.Runner.CommandLine.Args.MonitorSocketAddress,
+                     Constants.Runner.CommandLine.Args.Name,
++                    Constants.Runner.CommandLine.Args.Profile,
+                     Constants.Runner.CommandLine.Args.PAT,
+                     Constants.Runner.CommandLine.Args.RunnerGroup,
+                     Constants.Runner.CommandLine.Args.Token,
+@@ -52,14 +53,39 @@ public sealed class CommandSettings
+                     Constants.Runner.CommandLine.Args.WindowsLogonPassword,
+                     Constants.Runner.CommandLine.Args.Work
+                 },
++            [Constants.Runner.CommandLine.Commands.Add] =
++                new string[]
++                {
++                    Constants.Runner.CommandLine.Flags.DisableUpdate,
++                    Constants.Runner.CommandLine.Flags.Ephemeral,
++                    Constants.Runner.CommandLine.Flags.Replace,
++                    Constants.Runner.CommandLine.Flags.Unattended,
++                    Constants.Runner.CommandLine.Flags.NoDefaultLabels,
++                    Constants.Runner.CommandLine.Args.Auth,
++                    Constants.Runner.CommandLine.Args.Labels,
++                    Constants.Runner.CommandLine.Args.MonitorSocketAddress,
++                    Constants.Runner.CommandLine.Args.Name,
++                    Constants.Runner.CommandLine.Args.Profile,
++                    Constants.Runner.CommandLine.Args.PAT,
++                    Constants.Runner.CommandLine.Args.RunnerGroup,
++                    Constants.Runner.CommandLine.Args.Token,
++                    Constants.Runner.CommandLine.Args.Url,
++                    Constants.Runner.CommandLine.Args.UserName,
++                    Constants.Runner.CommandLine.Args.Work
++                },
+             // Valid remove flags and args
+             [Constants.Runner.CommandLine.Commands.Remove] =
+                 new string[]
+                 {
++                    Constants.Runner.CommandLine.Args.Profile,
+                     Constants.Runner.CommandLine.Args.Token,
+                     Constants.Runner.CommandLine.Args.PAT,
+                     Constants.Runner.CommandLine.Flags.Local
+                 },
++            [Constants.Runner.CommandLine.Commands.List] =
++                new string[]
++                {
++                },
+             // Valid run flags and args
+             [Constants.Runner.CommandLine.Commands.Run] =
+                 new string[]
+@@ -74,8 +100,10 @@ public sealed class CommandSettings
+         };
+ 
+         // Commands.
++        public bool Add => TestCommand(Constants.Runner.CommandLine.Commands.Add);
+         public bool Configure => TestCommand(Constants.Runner.CommandLine.Commands.Configure);
+         public bool Remove => TestCommand(Constants.Runner.CommandLine.Commands.Remove);
++        public bool List => TestCommand(Constants.Runner.CommandLine.Commands.List);
+         public bool Run => TestCommand(Constants.Runner.CommandLine.Commands.Run);
+         public bool Warmup => TestCommand(Constants.Runner.CommandLine.Commands.Warmup);
+ 
+@@ -168,14 +196,22 @@ public string GetCommandName()
+         {
+             string command = string.Empty;
+ 
+-            if (Configure)
++            if (Add)
++            {
++                command = Constants.Runner.CommandLine.Commands.Add;
++            }
++            else if (Configure)
+             {
+                 command = Constants.Runner.CommandLine.Commands.Configure;
+             }
+             else if (Remove)
+             {
+                 command = Constants.Runner.CommandLine.Commands.Remove;
+             }
++            else if (List)
++            {
++                command = Constants.Runner.CommandLine.Commands.List;
++            }
+             else if (Run)
+             {
+                 command = Constants.Runner.CommandLine.Commands.Run;
+@@ -234,6 +270,11 @@ public string GetRunnerName()
+                 validator: Validators.NonEmptyValidator);
+         }
+ 
++        public string GetProfileName()
++        {
++            return GetArg(Constants.Runner.CommandLine.Args.Profile);
++        }
++
+         public string GetRunnerGroupName(string defaultPoolName = null)
+         {
+             return GetArgOrPrompt(
+diff --git a/src/Runner.Listener/Configuration/ConfigurationManager.cs b/src/Runner.Listener/Configuration/ConfigurationManager.cs
+--- a/src/Runner.Listener/Configuration/ConfigurationManager.cs
++++ b/src/Runner.Listener/Configuration/ConfigurationManager.cs
+@@ -10,6 +10,7 @@
+ using GitHub.DistributedTask.WebApi;
+ using GitHub.Runner.Common;
+ using GitHub.Runner.Common.Util;
++using GitHub.Runner.Listener.MultiRepo;
+ using GitHub.Runner.Sdk;
+ using GitHub.Services.Common;
+ using GitHub.Services.Common.Internal;
+@@ -23,6 +24,7 @@ public interface IConfigurationManager : IRunnerService
+         bool IsConfigured();
+         Task ConfigureAsync(CommandSettings command);
+         Task UnconfigureAsync(CommandSettings command);
++        void ListProfiles();
+         void DeleteLocalRunnerConfig();
+         RunnerSettings LoadSettings();
+         RunnerSettings LoadMigratedSettings();
+@@ -84,6 +86,18 @@ public RunnerSettings LoadMigratedSettings()
+         }
+ 
+         public async Task ConfigureAsync(CommandSettings command)
++        {
++            var profileName = command.GetProfileName();
++            if (!string.IsNullOrEmpty(profileName))
++            {
++                await ConfigureProfileAsync(command, profileName);
++                return;
++            }
++
++            await ConfigureSingleRunnerAsync(command, rejectIfAlreadyConfigured: true);
++        }
++
++        private async Task ConfigureSingleRunnerAsync(CommandSettings command, bool rejectIfAlreadyConfigured)
+         {
+             _term.WriteLine();
+             _term.WriteLine("--------------------------------------------------------------------------------");
+@@ -121,7 +135,7 @@ public async Task ConfigureAsync(CommandSettings command)
+ #endif
+             }
+ 
+-            if (IsConfigured())
++            if (rejectIfAlreadyConfigured && IsConfigured())
+             {
+                 throw new InvalidOperationException("Cannot configure the runner because it is already configured. To reconfigure the runner, run 'config.cmd remove' or './config.sh remove' first.");
+             }
+@@ -492,6 +506,36 @@ public async Task ConfigureAsync(CommandSettings command)
+ #endif
+         }
+ 
++        private async Task ConfigureProfileAsync(CommandSettings command, string profileName)
++        {
++            if (string.IsNullOrWhiteSpace(profileName))
++            {
++                throw new InvalidOperationException("Profile name must not be empty.");
++            }
++
++            if (RunnerProfileStore.ProfileExists(HostContext, profileName) && !command.GetReplace())
++            {
++                throw new InvalidOperationException($"Profile '{profileName}' already exists. Use --replace to overwrite it.");
++            }
++
++            var snapshot = RunnerProfileStore.CaptureActiveConfiguration(HostContext);
++            try
++            {
++                DeleteLocalRunnerConfigSilently();
++                _store.Reset();
++
++                await ConfigureSingleRunnerAsync(command, rejectIfAlreadyConfigured: false);
++                RunnerProfileStore.SaveActiveConfigurationAsProfile(HostContext, profileName);
++                _term.WriteSuccessMessage($"Profile '{profileName}' saved under .runner.d/{profileName}");
++            }
++            finally
++            {
++                DeleteLocalRunnerConfigSilently();
++                RunnerProfileStore.RestoreActiveConfiguration(HostContext, snapshot);
++                _store.Reset();
++            }
++        }
++
+         // Delete .runner and .credentials files
+         public void DeleteLocalRunnerConfig()
+         {
+@@ -525,6 +569,18 @@ public void DeleteLocalRunnerConfig()
+         }
+ 
+         public async Task UnconfigureAsync(CommandSettings command)
++        {
++            var profileName = command.GetProfileName();
++            if (!string.IsNullOrEmpty(profileName))
++            {
++                await UnconfigureProfileAsync(command, profileName);
++                return;
++            }
++
++            await UnconfigureSingleRunnerAsync(command);
++        }
++
++        private async Task UnconfigureSingleRunnerAsync(CommandSettings command)
+         {
+             string currentAction = string.Empty;
+ 
+@@ -617,6 +673,52 @@ public async Task UnconfigureAsync(CommandSettings command)
+             _term.WriteLine();
+         }
+ 
++        private async Task UnconfigureProfileAsync(CommandSettings command, string profileName)
++        {
++            if (!RunnerProfileStore.ProfileExists(HostContext, profileName))
++            {
++                throw new InvalidOperationException($"Profile '{profileName}' does not exist.");
++            }
++
++            if (command.RemoveLocalConfig)
++            {
++                RunnerProfileStore.DeleteProfile(HostContext, profileName);
++                _term.WriteSuccessMessage($"Removed profile '{profileName}' from .runner.d");
++                return;
++            }
++
++            var snapshot = RunnerProfileStore.CaptureActiveConfiguration(HostContext);
++            try
++            {
++                var profile = RunnerProfileStore.LoadProfiles(HostContext).First(x => string.Equals(x.Name, profileName, StringComparison.OrdinalIgnoreCase));
++                RunnerProfileStore.ActivateProfile(HostContext, profile);
++                _store.Reset();
++                await UnconfigureSingleRunnerAsync(command);
++                RunnerProfileStore.DeleteProfile(HostContext, profileName);
++                _term.WriteSuccessMessage($"Removed profile '{profileName}'");
++            }
++            finally
++            {
++                RunnerProfileStore.RestoreActiveConfiguration(HostContext, snapshot);
++                _store.Reset();
++            }
++        }
++
++        public void ListProfiles()
++        {
++            var profiles = RunnerProfileStore.LoadProfiles(HostContext);
++            if (profiles.Count == 0)
++            {
++                _term.WriteLine("No profiles found in .runner.d");
++                return;
++            }
++
++            foreach (var profile in profiles.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
++            {
++                _term.WriteLine($"{profile.Name}\t{profile.Settings.AgentName}\t{profile.Settings.GitHubUrl ?? profile.Settings.ServerUrl}");
++            }
++        }
++
+         private ICredentialProvider GetCredentialProvider(CommandSettings command, string serverUrl)
+         {
+             Trace.Info(nameof(GetCredentialProvider));
+@@ -636,6 +738,18 @@ private ICredentialProvider GetCredentialProvider(CommandSettings command, strin
+             return provider;
+         }
+ 
++        private void DeleteLocalRunnerConfigSilently()
++        {
++            try
++            {
++                DeleteLocalRunnerConfig();
++            }
++            catch (Exception ex)
++            {
++                Trace.Warning($"Ignoring local config cleanup failure. {ex.Message}");
++            }
++        }
++
+ 
+         private TaskAgent UpdateExistingAgent(TaskAgent agent, RSAParameters publicKey, ISet<string> userLabels, bool ephemeral, bool disableUpdate, bool noDefaultLabels)
+         {
+diff --git a/src/Runner.Listener/Configuration/ProfileCredentialFactory.cs b/src/Runner.Listener/Configuration/ProfileCredentialFactory.cs
+new file mode 100644
+--- /dev/null
++++ b/src/Runner.Listener/Configuration/ProfileCredentialFactory.cs
+@@ -0,0 +1,92 @@
++using System;
++using System.IO;
++using System.Security.Cryptography;
++using System.Text;
++using GitHub.Runner.Common;
++using GitHub.Runner.Common.Util;
++using GitHub.Runner.Sdk;
++using GitHub.Services.Common;
++using GitHub.Services.OAuth;
++using GitHub.Services.WebApi;
++
++namespace GitHub.Runner.Listener.Configuration
++{
++    internal static class ProfileCredentialFactory
++    {
++        public static VssCredentials Create(IHostContext hostContext, CredentialData credentialData, bool allowAuthUrlV2, string profileRootPath = null)
++        {
++            ArgUtil.NotNull(hostContext, nameof(hostContext));
++            ArgUtil.NotNull(credentialData, nameof(credentialData));
++
++            if (string.Equals(credentialData.Scheme, Constants.Configuration.OAuth, StringComparison.OrdinalIgnoreCase) &&
++                !string.IsNullOrEmpty(profileRootPath))
++            {
++                return CreateOAuthCredentials(hostContext, credentialData, allowAuthUrlV2, profileRootPath);
++            }
++
++            if (!CredentialManager.CredentialTypes.TryGetValue(credentialData.Scheme, out var credentialType))
++            {
++                throw new ArgumentException($"Unsupported credential scheme '{credentialData.Scheme}'.", nameof(credentialData));
++            }
++
++            var provider = Activator.CreateInstance(credentialType) as ICredentialProvider;
++            ArgUtil.NotNull(provider, nameof(provider));
++            provider.CredentialData = credentialData;
++            return provider.GetVssCredentials(hostContext, allowAuthUrlV2);
++        }
++
++        private static VssCredentials CreateOAuthCredentials(IHostContext hostContext, CredentialData credentialData, bool allowAuthUrlV2, string profileRootPath)
++        {
++            var clientId = credentialData.Data.GetValueOrDefault("clientId", null);
++            var authorizationUrl = credentialData.Data.GetValueOrDefault("authorizationUrl", null);
++            var authorizationUrlV2 = credentialData.Data.GetValueOrDefault("authorizationUrlV2", null);
++
++            if (allowAuthUrlV2 &&
++                !string.IsNullOrEmpty(authorizationUrlV2) &&
++                hostContext.AllowAuthMigration)
++            {
++                authorizationUrl = authorizationUrlV2;
++            }
++
++            var oauthEndpointUrl = credentialData.Data.GetValueOrDefault("oauthEndpointUrl", authorizationUrl);
++
++            ArgUtil.NotNullOrEmpty(clientId, nameof(clientId));
++            ArgUtil.NotNullOrEmpty(authorizationUrl, nameof(authorizationUrl));
++
++            using var rsa = LoadProfileKey(profileRootPath);
++            var keyParameters = rsa.ExportParameters(true);
++            var signingCredentials = VssSigningCredentials.Create(
++                () =>
++                {
++                    var signingKey = RSA.Create();
++                    signingKey.ImportParameters(keyParameters);
++                    return signingKey;
++                },
++                StringUtil.ConvertToBoolean(credentialData.Data.GetValueOrDefault("requireFipsCryptography"), false));
++            var clientCredential = new VssOAuthJwtBearerClientCredential(clientId, authorizationUrl, signingCredentials);
++            var agentCredential = new VssOAuthCredential(new Uri(oauthEndpointUrl, UriKind.Absolute), VssOAuthGrant.ClientCredentials, clientCredential);
++            return new VssCredentials(agentCredential, CredentialPromptType.DoNotPrompt);
++        }
++
++        private static RSA LoadProfileKey(string profileRootPath)
++        {
++            var keyFile = Path.Combine(profileRootPath, ".credentials_rsaparams");
++            if (!File.Exists(keyFile))
++            {
++                throw new CryptographicException($"RSA key file {keyFile} was not found");
++            }
++
++            var rsa = RSA.Create();
++#if OS_WINDOWS
++#pragma warning disable CA1416
++            var encryptedBytes = File.ReadAllBytes(keyFile);
++            var parametersString = Encoding.UTF8.GetString(ProtectedData.Unprotect(encryptedBytes, null, DataProtectionScope.LocalMachine));
++            rsa.ImportParameters(StringUtil.ConvertFromJson<RSAParametersSerializable>(parametersString).RSAParameters);
++#pragma warning restore CA1416
++#else
++            rsa.ImportParameters(IOUtil.LoadObject<RSAParametersSerializable>(keyFile).RSAParameters);
++#endif
++            return rsa;
++        }
++    }
++}
+diff --git a/src/Runner.Listener/MultiRepo/ActiveConfigurationSnapshot.cs b/src/Runner.Listener/MultiRepo/ActiveConfigurationSnapshot.cs
+new file mode 100644
+--- /dev/null
++++ b/src/Runner.Listener/MultiRepo/ActiveConfigurationSnapshot.cs
+@@ -0,0 +1,9 @@
++using System.Collections.Generic;
++
++namespace GitHub.Runner.Listener.MultiRepo
++{
++    internal sealed class ActiveConfigurationSnapshot
++    {
++        public Dictionary<string, byte[]> Files { get; } = new();
++    }
++}
+diff --git a/src/Runner.Listener/MultiRepo/MultiRepoPendingScheduler.cs b/src/Runner.Listener/MultiRepo/MultiRepoPendingScheduler.cs
+new file mode 100644
+--- /dev/null
++++ b/src/Runner.Listener/MultiRepo/MultiRepoPendingScheduler.cs
+@@ -0,0 +1,39 @@
++using System.Collections.Generic;
++
++namespace GitHub.Runner.Listener.MultiRepo
++{
++    internal sealed class MultiRepoPendingScheduler
++    {
++        private readonly Queue<RepositoryListenerContext> _pendingQueue = new();
++        private long _nextSequence;
++
++        public int Count => _pendingQueue.Count;
++
++        public bool EnqueuePending(RepositoryListenerContext context)
++        {
++            if (context.PendingWork)
++            {
++                return false;
++            }
++
++            context.PendingWork = true;
++            context.PendingSequence = ++_nextSequence;
++            _pendingQueue.Enqueue(context);
++            return true;
++        }
++
++        public bool TryDequeue(out RepositoryListenerContext context)
++        {
++            if (_pendingQueue.Count == 0)
++            {
++                context = null;
++                return false;
++            }
++
++            context = _pendingQueue.Dequeue();
++            context.PendingWork = false;
++            context.PendingSequence = 0;
++            return true;
++        }
++    }
++}
+diff --git a/src/Runner.Listener/MultiRepo/RepositoryListenerContext.cs b/src/Runner.Listener/MultiRepo/RepositoryListenerContext.cs
+new file mode 100644
+--- /dev/null
++++ b/src/Runner.Listener/MultiRepo/RepositoryListenerContext.cs
+@@ -0,0 +1,14 @@
++using System.Threading.Tasks;
++using GitHub.DistributedTask.WebApi;
++
++namespace GitHub.Runner.Listener.MultiRepo
++{
++    internal sealed class RepositoryListenerContext
++    {
++        public RunnerProfile Profile { get; init; }
++        public IMessageListener Listener { get; init; }
++        public bool PendingWork { get; set; }
++        public long PendingSequence { get; set; }
++        public Task<TaskAgentMessage> PollTask { get; set; }
++    }
++}
+diff --git a/src/Runner.Listener/MultiRepo/RunnerProfile.cs b/src/Runner.Listener/MultiRepo/RunnerProfile.cs
+new file mode 100644
+--- /dev/null
++++ b/src/Runner.Listener/MultiRepo/RunnerProfile.cs
+@@ -0,0 +1,17 @@
++using GitHub.Runner.Common;
++
++namespace GitHub.Runner.Listener.MultiRepo
++{
++    internal sealed class RunnerProfile
++    {
++        public string Name { get; init; }
++        public string RootPath { get; init; }
++        public RunnerSettings Settings { get; init; }
++        public CredentialData Credential { get; init; }
++
++        public override string ToString()
++        {
++            return $"{Name} ({Settings?.RepoOrOrgName ?? "unknown"})";
++        }
++    }
++}
+diff --git a/src/Runner.Listener/MultiRepo/RunnerProfileStore.cs b/src/Runner.Listener/MultiRepo/RunnerProfileStore.cs
+new file mode 100644
+--- /dev/null
++++ b/src/Runner.Listener/MultiRepo/RunnerProfileStore.cs
+@@ -0,0 +1,212 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Text;
++using GitHub.Runner.Common;
++using GitHub.Runner.Sdk;
++
++namespace GitHub.Runner.Listener.MultiRepo
++{
++    internal static class RunnerProfileStore
++    {
++        private const string ProfilesDirectoryName = ".runner.d";
++        private static readonly WellKnownConfigFile[] s_profileFiles =
++        [
++            WellKnownConfigFile.Runner,
++            WellKnownConfigFile.Credentials,
++            WellKnownConfigFile.MigratedRunner,
++            WellKnownConfigFile.MigratedCredentials,
++            WellKnownConfigFile.RSACredentials,
++        ];
++
++        public static IReadOnlyList<RunnerProfile> LoadProfiles(IHostContext hostContext)
++        {
++            ArgUtil.NotNull(hostContext, nameof(hostContext));
++
++            var profilesRoot = GetProfilesRoot(hostContext);
++            if (!Directory.Exists(profilesRoot))
++            {
++                return Array.Empty<RunnerProfile>();
++            }
++
++            var profiles = new List<RunnerProfile>();
++            foreach (var directory in Directory.EnumerateDirectories(profilesRoot).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
++            {
++                var runnerFile = Path.Combine(directory, GetFileName(WellKnownConfigFile.Runner));
++                var credentialFile = Path.Combine(directory, GetFileName(WellKnownConfigFile.Credentials));
++                if (!File.Exists(runnerFile) || !File.Exists(credentialFile))
++                {
++                    continue;
++                }
++
++                var settingsJson = File.ReadAllText(runnerFile, Encoding.UTF8);
++                var settings = StringUtil.ConvertFromJson<RunnerSettings>(settingsJson);
++                var credential = IOUtil.LoadObject<CredentialData>(credentialFile);
++
++                profiles.Add(new RunnerProfile
++                {
++                    Name = Path.GetFileName(directory),
++                    RootPath = directory,
++                    Settings = settings,
++                    Credential = credential,
++                });
++            }
++
++            return profiles;
++        }
++
++        public static ActiveConfigurationSnapshot CaptureActiveConfiguration(IHostContext hostContext)
++        {
++            ArgUtil.NotNull(hostContext, nameof(hostContext));
++
++            var snapshot = new ActiveConfigurationSnapshot();
++            var root = hostContext.GetDirectory(WellKnownDirectory.Root);
++            foreach (var configFile in s_profileFiles)
++            {
++                var fileName = GetFileName(configFile);
++                var path = Path.Combine(root, fileName);
++                if (File.Exists(path))
++                {
++                    snapshot.Files[fileName] = File.ReadAllBytes(path);
++                }
++            }
++
++            return snapshot;
++        }
++
++        public static void RestoreActiveConfiguration(IHostContext hostContext, ActiveConfigurationSnapshot snapshot)
++        {
++            ArgUtil.NotNull(hostContext, nameof(hostContext));
++            ArgUtil.NotNull(snapshot, nameof(snapshot));
++
++            var root = hostContext.GetDirectory(WellKnownDirectory.Root);
++            foreach (var configFile in s_profileFiles)
++            {
++                var fileName = GetFileName(configFile);
++                var target = Path.Combine(root, fileName);
++                if (snapshot.Files.TryGetValue(fileName, out var bytes))
++                {
++                    ReplaceFile(target, bytes);
++                }
++                else if (File.Exists(target))
++                {
++                    IOUtil.DeleteFile(target);
++                }
++            }
++        }
++
++        public static void SaveActiveConfigurationAsProfile(IHostContext hostContext, string profileName)
++        {
++            ArgUtil.NotNull(hostContext, nameof(hostContext));
++            ArgUtil.NotNullOrEmpty(profileName, nameof(profileName));
++
++            var root = hostContext.GetDirectory(WellKnownDirectory.Root);
++            var profileRoot = GetProfileRoot(hostContext, profileName);
++            Directory.CreateDirectory(profileRoot);
++
++            foreach (var configFile in s_profileFiles)
++            {
++                var fileName = GetFileName(configFile);
++                var source = Path.Combine(root, fileName);
++                var target = Path.Combine(profileRoot, fileName);
++                if (File.Exists(source))
++                {
++                    ReplaceFile(source, target);
++                }
++                else if (File.Exists(target))
++                {
++                    IOUtil.DeleteFile(target);
++                }
++            }
++        }
++
++        public static void ActivateProfile(IHostContext hostContext, RunnerProfile profile)
++        {
++            ArgUtil.NotNull(hostContext, nameof(hostContext));
++            ArgUtil.NotNull(profile, nameof(profile));
++
++            var root = hostContext.GetDirectory(WellKnownDirectory.Root);
++            foreach (var configFile in s_profileFiles)
++            {
++                var source = Path.Combine(profile.RootPath, GetFileName(configFile));
++                var target = Path.Combine(root, GetFileName(configFile));
++
++                if (File.Exists(source))
++                {
++                    ReplaceFile(source, target);
++                }
++                else if (File.Exists(target))
++                {
++                    IOUtil.DeleteFile(target);
++                }
++            }
++        }
++
++        public static bool ProfileExists(IHostContext hostContext, string profileName)
++        {
++            ArgUtil.NotNull(hostContext, nameof(hostContext));
++            ArgUtil.NotNullOrEmpty(profileName, nameof(profileName));
++            return Directory.Exists(GetProfileRoot(hostContext, profileName));
++        }
++
++        public static void DeleteProfile(IHostContext hostContext, string profileName)
++        {
++            ArgUtil.NotNull(hostContext, nameof(hostContext));
++            ArgUtil.NotNullOrEmpty(profileName, nameof(profileName));
++
++            var profileRoot = GetProfileRoot(hostContext, profileName);
++            if (Directory.Exists(profileRoot))
++            {
++                Directory.Delete(profileRoot, recursive: true);
++            }
++        }
++
++        private static string GetProfilesRoot(IHostContext hostContext)
++        {
++            return Path.Combine(hostContext.GetDirectory(WellKnownDirectory.Root), ProfilesDirectoryName);
++        }
++
++        private static string GetProfileRoot(IHostContext hostContext, string profileName)
++        {
++            return Path.Combine(GetProfilesRoot(hostContext), profileName);
++        }
++
++        private static string GetFileName(WellKnownConfigFile configFile)
++        {
++            return configFile switch
++            {
++                WellKnownConfigFile.Runner => ".runner",
++                WellKnownConfigFile.Credentials => ".credentials",
++                WellKnownConfigFile.MigratedRunner => ".runner_migrated",
++                WellKnownConfigFile.MigratedCredentials => ".credentials_migrated",
++                WellKnownConfigFile.RSACredentials => ".credentials_rsaparams",
++                _ => throw new NotSupportedException($"Unsupported profile config file '{configFile}'."),
++            };
++        }
++
++        private static void ReplaceFile(string source, string target)
++        {
++            if (File.Exists(target))
++            {
++                File.SetAttributes(target, FileAttributes.Normal);
++                File.Delete(target);
++            }
++
++            File.Copy(source, target, overwrite: false);
++            File.SetAttributes(target, File.GetAttributes(target) | FileAttributes.Hidden);
++        }
++
++        private static void ReplaceFile(string target, byte[] contents)
++        {
++            if (File.Exists(target))
++            {
++                File.SetAttributes(target, FileAttributes.Normal);
++                File.Delete(target);
++            }
++
++            File.WriteAllBytes(target, contents);
++            File.SetAttributes(target, File.GetAttributes(target) | FileAttributes.Hidden);
++        }
++    }
++}
+diff --git a/src/Runner.Listener/Runner.cs b/src/Runner.Listener/Runner.cs
+--- a/src/Runner.Listener/Runner.cs
++++ b/src/Runner.Listener/Runner.cs
+@@ -15,6 +15,7 @@
+ using GitHub.Runner.Common.Util;
+ using GitHub.Runner.Listener.Check;
+ using GitHub.Runner.Listener.Configuration;
++using GitHub.Runner.Listener.MultiRepo;
+ using GitHub.Runner.Sdk;
+ using GitHub.Services.OAuth;
+ using GitHub.Services.WebApi;
+@@ -149,7 +150,7 @@ public async Task<int> ExecuteCommand(CommandSettings command)
+ 
+                 // Configure runner prompt for args if not supplied
+                 // Unattended configure mode will not prompt for args if not supplied and error on any missing or invalid value.
+-                if (command.Configure)
++                if (command.Configure || command.Add)
+                 {
+                     try
+                     {
+@@ -164,6 +165,21 @@ public async Task<int> ExecuteCommand(CommandSettings command)
+                     }
+                 }
+ 
++                if (command.List)
++                {
++                    try
++                    {
++                        configManager.ListProfiles();
++                        return Constants.Runner.ReturnCode.Success;
++                    }
++                    catch (Exception ex)
++                    {
++                        Trace.Error(ex);
++                        _term.WriteError(ex.Message);
++                        return Constants.Runner.ReturnCode.TerminatedError;
++                    }
++                }
++
+                 // remove config files, remove service, and exit
+                 if (command.Remove)
+                 {
+@@ -267,16 +283,21 @@ public async Task<int> ExecuteCommand(CommandSettings command)
+                     }
+                 }
+ 
+-                RunnerSettings settings = configManager.LoadSettings();
+-
+                 var store = HostContext.GetService<IConfigurationStore>();
+                 bool configuredAsService = store.IsServiceConfigured();
++                var profileDirectoryProfiles = RunnerProfileStore.LoadProfiles(HostContext);
++                bool useMultiProfileMode = profileDirectoryProfiles.Count > 1;
++                RunnerSettings settings = null;
++                if (!useMultiProfileMode)
++                {
++                    settings = configManager.LoadSettings();
++                }
+ 
+                 // Run runner
+                 if (command.Run) // this line is current break machine provisioner.
+                 {
+                     // Error if runner not configured.
+-                    if (!configManager.IsConfigured())
++                    if (!useMultiProfileMode && !configManager.IsConfigured())
+                     {
+                         _term.WriteError("Runner is not configured.");
+                         PrintUsage(command);
+@@ -315,7 +336,7 @@ public async Task<int> ExecuteCommand(CommandSettings command)
+                         _term.WriteLine("https://docs.github.com/en/actions/hosting-your-own-runners/autoscaling-with-self-hosted-runners#using-ephemeral-runners-for-autoscaling", ConsoleColor.Yellow);
+                     }
+ 
+-                    var cred = store.GetCredentials();
++                    var cred = !useMultiProfileMode ? store.GetCredentials() : null;
+                     if (cred != null &&
+                         cred.Scheme == Constants.Configuration.OAuth &&
+                         cred.Data.ContainsKey("EnableAuthMigrationByDefault"))
+@@ -328,6 +349,11 @@ public async Task<int> ExecuteCommand(CommandSettings command)
+                     var returnJobResultForHosted = StringUtil.ConvertToBoolean(Environment.GetEnvironmentVariable("ACTIONS_RUNNER_RETURN_JOB_RESULT_FOR_HOSTED"));
+ 
+                     // Run the runner interactively or as service
++                    if (useMultiProfileMode)
++                    {
++                        return await ExecuteMultiRepoRunnerAsync(profileDirectoryProfiles);
++                    }
++
+                     return await ExecuteRunnerAsync(settings, command.RunOnce || settings.Ephemeral || returnJobResultForHosted, returnJobResultForHosted);
+                 }
+                 else
+@@ -921,6 +947,363 @@ private async Task<int> ExecuteRunnerAsync(RunnerSettings settings, bool runOnce
+             return returnCode;
+         }
+ 
++        private async Task<int> ExecuteMultiRepoRunnerAsync(IReadOnlyList<RunnerProfile> profiles)
++        {
++            if (profiles.Any(x => !x.Settings.UseV2Flow))
++            {
++                _term.WriteError("Multi-repository mode currently supports only broker-based runner registrations (UseV2Flow=true).");
++                return Constants.Runner.ReturnCode.TerminatedError;
++            }
++
++            if (profiles.Any(x => x.Settings.Ephemeral))
++            {
++                _term.WriteError("Multi-repository mode does not currently support ephemeral registrations.");
++                return Constants.Runner.ReturnCode.TerminatedError;
++            }
++
++            var configurationStore = HostContext.GetService<IConfigurationStore>();
++            var notification = HostContext.GetService<IJobNotification>();
++            notification.StartClient(profiles.First().Settings.MonitorSocketAddress);
++
++            var listenerContexts = new List<RepositoryListenerContext>();
++            foreach (var profile in profiles)
++            {
++                var listener = CreateMultiRepoListener(profile);
++                var result = await listener.CreateSessionAsync(HostContext.RunnerShutdownToken);
++                if (result == CreateSessionResult.Success)
++                {
++                    listenerContexts.Add(new RepositoryListenerContext
++                    {
++                        Profile = profile,
++                        Listener = listener,
++                    });
++                }
++                else
++                {
++                    Trace.Warning($"Failed to create session for profile '{profile.Name}'. Result: {result}");
++                }
++            }
++
++            if (listenerContexts.Count == 0)
++            {
++                _term.WriteError("No repository listener could be started.");
++                return Constants.Runner.ReturnCode.TerminatedError;
++            }
++
++            _term.WriteLine($"Current runner version: '{BuildConstants.RunnerPackage.Version}'");
++            _term.WriteLine($"{DateTime.UtcNow:u}: Listening for Jobs across {listenerContexts.Count} repositories");
++
++            var pendingScheduler = new MultiRepoPendingScheduler();
++            IJobDispatcher activeDispatcher = null;
++            bool shuttingDown = false;
++            try
++            {
++                foreach (var context in listenerContexts)
++                {
++                    context.PollTask = context.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
++                }
++
++                while (!HostContext.RunnerShutdownToken.IsCancellationRequested)
++                {
++                    if (activeDispatcher != null && !activeDispatcher.Busy)
++                    {
++                        await activeDispatcher.WaitAsync(CancellationToken.None);
++                        foreach (var context in listenerContexts)
++                        {
++                            activeDispatcher.JobStatus -= context.Listener.OnJobStatus;
++                        }
++
++                        await activeDispatcher.ShutdownAsync();
++                        activeDispatcher = null;
++                        configurationStore.ClearActiveRunnerSettings();
++                    }
++
++                    if (activeDispatcher == null && pendingScheduler.TryDequeue(out var pendingContext))
++                    {
++                        activeDispatcher = await TryDispatchNextJobForProfileAsync(pendingContext, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
++                        if (pendingContext.PollTask == null)
++                        {
++                            pendingContext.PollTask = pendingContext.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
++                        }
++
++                        continue;
++                    }
++
++                    var pollTasks = listenerContexts
++                        .Where(x => x.PollTask != null)
++                        .Select(x => x.PollTask)
++                        .Cast<Task>()
++                        .ToList();
++                    pollTasks.Add(Task.Delay(TimeSpan.FromMilliseconds(500), HostContext.RunnerShutdownToken));
++
++                    var completedTask = await Task.WhenAny(pollTasks);
++                    if (completedTask is not Task<TaskAgentMessage> completedPoll)
++                    {
++                        continue;
++                    }
++
++                    var completedContext = listenerContexts.FirstOrDefault(x => x.PollTask == completedPoll);
++                    if (completedContext == null)
++                    {
++                        continue;
++                    }
++
++                    completedContext.PollTask = null;
++
++                    TaskAgentMessage message = null;
++                    try
++                    {
++                        message = await completedPoll;
++                    }
++                    catch (Exception ex) when (ex is TaskAgentNotFoundException || ex is RunnerNotFoundException)
++                    {
++                        Trace.Warning($"Profile '{completedContext.Profile.Name}' is no longer registered. {ex.Message}");
++                        await SafeDeleteSessionAsync(completedContext.Listener);
++                        listenerContexts.Remove(completedContext);
++                        if (listenerContexts.Count == 0)
++                        {
++                            _term.WriteError("All repository registrations were removed or became unavailable.");
++                            return Constants.Runner.ReturnCode.TerminatedError;
++                        }
++                        continue;
++                    }
++
++                    if (message == null)
++                    {
++                        completedContext.PollTask = completedContext.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
++                        continue;
++                    }
++
++                    var messageResult = await HandleMultiRepoMessageAsync(
++                        completedContext,
++                        message,
++                        listenerContexts,
++                        pendingScheduler,
++                        activeDispatcher,
++                        configurationStore);
++
++                    activeDispatcher ??= messageResult.Dispatcher;
++
++                    if (messageResult.ContinuePolling && completedContext.PollTask == null && !completedContext.PendingWork)
++                    {
++                        completedContext.PollTask = completedContext.Listener.GetNextMessageAsync(HostContext.RunnerShutdownToken);
++                    }
++                }
++            }
++            catch (OperationCanceledException) when (HostContext.RunnerShutdownToken.IsCancellationRequested)
++            {
++                shuttingDown = true;
++            }
++            finally
++            {
++                if (activeDispatcher != null)
++                {
++                    foreach (var context in listenerContexts)
++                    {
++                        activeDispatcher.JobStatus -= context.Listener.OnJobStatus;
++                    }
++
++                    await activeDispatcher.ShutdownAsync();
++                }
++
++                configurationStore.ClearActiveRunnerSettings();
++
++                foreach (var context in listenerContexts)
++                {
++                    await SafeDeleteSessionAsync(context.Listener);
++                }
++            }
++
++            return shuttingDown ? Constants.Runner.ReturnCode.Success : Constants.Runner.ReturnCode.Success;
++        }
++
++        private IMessageListener CreateMultiRepoListener(RunnerProfile profile)
++        {
++            var runnerServer = HostContext.CreateService<IRunnerServer>();
++            var brokerServer = HostContext.CreateService<IBrokerServer>();
++            var listener = new BrokerMessageListener(profile.Settings, profile.Credential, runnerServer, brokerServer, profile.RootPath);
++            listener.Initialize(HostContext);
++            return listener;
++        }
++
++        private async Task<(bool ContinuePolling, IJobDispatcher Dispatcher)> HandleMultiRepoMessageAsync(
++            RepositoryListenerContext context,
++            TaskAgentMessage message,
++            IReadOnlyList<RepositoryListenerContext> listenerContexts,
++            MultiRepoPendingScheduler pendingScheduler,
++            IJobDispatcher activeDispatcher,
++            IConfigurationStore configurationStore)
++        {
++            HostContext.WritePerfCounter($"MessageReceived_{message.MessageType}_{context.Profile.Name}");
++
++            if (MessageUtil.IsRunServiceJob(message.MessageType))
++            {
++                if (activeDispatcher == null)
++                {
++                    var dispatched = await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, HostContext.RunnerShutdownToken);
++                    return (dispatched == null, dispatched);
++                }
++
++                if (pendingScheduler.EnqueuePending(context))
++                {
++                    Trace.Info($"Queued pending work for profile '{context.Profile.Name}'.");
++                }
++
++                return (false, null);
++            }
++
++            if (string.Equals(message.MessageType, JobCancelMessage.MessageType, StringComparison.OrdinalIgnoreCase))
++            {
++                if (activeDispatcher != null)
++                {
++                    var cancelJobMessage = JsonUtility.FromString<JobCancelMessage>(message.Body);
++                    activeDispatcher.Cancel(cancelJobMessage);
++                }
++
++                return (true, null);
++            }
++
++            if (string.Equals(message.MessageType, TaskAgentMessageTypes.ForceTokenRefresh, StringComparison.OrdinalIgnoreCase))
++            {
++                await context.Listener.RefreshListenerTokenAsync();
++                return (true, null);
++            }
++
++            if (string.Equals(message.MessageType, AgentRefreshMessage.MessageType, StringComparison.OrdinalIgnoreCase) ||
++                string.Equals(message.MessageType, RunnerRefreshMessage.MessageType, StringComparison.OrdinalIgnoreCase))
++            {
++                Trace.Warning($"Ignoring self-update message for profile '{context.Profile.Name}' while multi-repository mode is active.");
++                return (true, null);
++            }
++
++            if (string.Equals(message.MessageType, RunnerRefreshConfigMessage.MessageType, StringComparison.OrdinalIgnoreCase))
++            {
++                Trace.Warning($"Ignoring runner config refresh message for profile '{context.Profile.Name}' while multi-repository mode is active.");
++                return (true, null);
++            }
++
++            Trace.Warning($"Ignoring unsupported multi-repo message type '{message.MessageType}' for profile '{context.Profile.Name}'.");
++            return (true, null);
++        }
++
++        private async Task<IJobDispatcher> TryDispatchNextJobForProfileAsync(
++            RepositoryListenerContext context,
++            IReadOnlyList<RepositoryListenerContext> listenerContexts,
++            IConfigurationStore configurationStore,
++            CancellationToken cancellationToken)
++        {
++            while (!cancellationToken.IsCancellationRequested)
++            {
++                var message = await context.Listener.GetNextMessageAsync(cancellationToken);
++                if (message == null)
++                {
++                    continue;
++                }
++
++                if (!MessageUtil.IsRunServiceJob(message.MessageType))
++                {
++                    await HandleMultiRepoMessageAsync(
++                        context,
++                        message,
++                        listenerContexts,
++                        new MultiRepoPendingScheduler(),
++                        null,
++                        configurationStore);
++                    continue;
++                }
++
++                return await TryDispatchBrokerMessageAsync(context, message, listenerContexts, configurationStore, cancellationToken);
++            }
++
++            return null;
++        }
++
++        private async Task<IJobDispatcher> TryDispatchBrokerMessageAsync(
++            RepositoryListenerContext context,
++            TaskAgentMessage message,
++            IReadOnlyList<RepositoryListenerContext> listenerContexts,
++            IConfigurationStore configurationStore,
++            CancellationToken cancellationToken)
++        {
++            var messageRef = StringUtil.ConvertFromJson<RunnerJobRequestRef>(message.Body);
++            if (messageRef.ShouldAcknowledge)
++            {
++                try
++                {
++                    await context.Listener.AcknowledgeMessageAsync(messageRef.RunnerRequestId, cancellationToken);
++                }
++                catch (Exception ex)
++                {
++                    Trace.Error($"Best-effort acknowledge failed for profile '{context.Profile.Name}', request '{messageRef.RunnerRequestId}'.");
++                    Trace.Error(ex);
++                }
++            }
++
++            var jobRequestMessage = await AcquireJobMessageAsync(context.Profile, messageRef, cancellationToken);
++            if (jobRequestMessage == null)
++            {
++                return null;
++            }
++
++            RunnerProfileStore.ActivateProfile(HostContext, context.Profile);
++            configurationStore.SetActiveRunnerSettings(context.Profile.Settings);
++
++            var jobDispatcher = HostContext.CreateService<IJobDispatcher>();
++            foreach (var listenerContext in listenerContexts)
++            {
++                jobDispatcher.JobStatus += listenerContext.Listener.OnJobStatus;
++            }
++
++            jobDispatcher.Run(jobRequestMessage, false);
++            return jobDispatcher;
++        }
++
++        private async Task<Pipelines.AgentJobRequestMessage> AcquireJobMessageAsync(
++            RunnerProfile profile,
++            RunnerJobRequestRef messageRef,
++            CancellationToken cancellationToken)
++        {
++            if (string.IsNullOrEmpty(messageRef.RunServiceUrl))
++            {
++                var creds = ProfileCredentialFactory.Create(HostContext, profile.Credential, allowAuthUrlV2: false, profile.RootPath);
++                var actionsRunServer = HostContext.CreateService<IActionsRunServer>();
++                await actionsRunServer.ConnectAsync(new Uri(profile.Settings.ServerUrl), creds);
++                return await actionsRunServer.GetJobMessageAsync(messageRef.RunnerRequestId, cancellationToken);
++            }
++
++            var credsV2 = ProfileCredentialFactory.Create(HostContext, profile.Credential, allowAuthUrlV2: true, profile.RootPath);
++            var runServer = HostContext.CreateService<IRunServer>();
++            await runServer.ConnectAsync(new Uri(messageRef.RunServiceUrl), credsV2);
++
++            try
++            {
++                var jobMessage = await runServer.GetJobMessageAsync(messageRef.RunnerRequestId, messageRef.BillingOwnerId, cancellationToken);
++                _acquireJobThrottler.Reset();
++                return jobMessage;
++            }
++            catch (Exception ex) when (
++                ex is TaskOrchestrationJobNotFoundException ||
++                ex is TaskOrchestrationJobAlreadyAcquiredException ||
++                ex is TaskOrchestrationJobUnprocessableException)
++            {
++                Trace.Info($"Skipping pending job for profile '{profile.Name}'. {ex.Message}");
++                await _acquireJobThrottler.IncrementAndWaitAsync(cancellationToken);
++                return null;
++            }
++        }
++
++        private async Task SafeDeleteSessionAsync(IMessageListener listener)
++        {
++            try
++            {
++                await listener.DeleteSessionAsync();
++            }
++            catch (Exception ex)
++            {
++                Trace.Warning($"Failed to delete listener session. {ex.Message}");
++            }
++        }
++
+         private void HandleAuthMigrationChanged(object sender, AuthMigrationEventArgs e)
+         {
+             Trace.Verbose("Handle AuthMigrationChanged in Runner");
+diff --git a/src/Test/L0/Listener/CommandSettingsL0.cs b/src/Test/L0/Listener/CommandSettingsL0.cs
+--- a/src/Test/L0/Listener/CommandSettingsL0.cs
++++ b/src/Test/L0/Listener/CommandSettingsL0.cs
+@@ -105,6 +105,18 @@ public void GetsCommandConfigure()
+             }
+         }
+ 
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", nameof(CommandSettings))]
++        public void GetsCommandAdd()
++        {
++            using (TestHostContext hc = CreateTestContext())
++            {
++                var command = new CommandSettings(hc, args: new string[] { "add" });
++                Assert.True(command.Add);
++            }
++        }
++
+         [Fact]
+         [Trait("Level", "L0")]
+         [Trait("Category", nameof(CommandSettings))]
+@@ -141,6 +153,18 @@ public void GetsCommandUnconfigure()
+             }
+         }
+ 
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", nameof(CommandSettings))]
++        public void GetsCommandList()
++        {
++            using (TestHostContext hc = CreateTestContext())
++            {
++                var command = new CommandSettings(hc, args: new string[] { "list" });
++                Assert.True(command.List);
++            }
++        }
++
+         [Fact]
+         [Trait("Level", "L0")]
+         [Trait("Category", nameof(CommandSettings))]
+@@ -276,6 +300,18 @@ public void GetsFlagVersion()
+             }
+         }
+ 
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", nameof(CommandSettings))]
++        public void GetsProfileArg()
++        {
++            using (TestHostContext hc = CreateTestContext())
++            {
++                var command = new CommandSettings(hc, args: new string[] { "--profile", "repo-a" });
++                Assert.Equal("repo-a", command.GetProfileName());
++            }
++        }
++
+         [Fact]
+         [Trait("Level", "L0")]
+         [Trait("Category", nameof(CommandSettings))]
+diff --git a/src/Test/L0/Listener/MultiRepoPendingSchedulerL0.cs b/src/Test/L0/Listener/MultiRepoPendingSchedulerL0.cs
+new file mode 100644
+--- /dev/null
++++ b/src/Test/L0/Listener/MultiRepoPendingSchedulerL0.cs
+@@ -0,0 +1,41 @@
++using GitHub.Runner.Listener;
++using GitHub.Runner.Listener.MultiRepo;
++using Xunit;
++
++namespace GitHub.Runner.Common.Tests.Listener
++{
++    public sealed class MultiRepoPendingSchedulerL0
++    {
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", "Runner")]
++        public void PreservesFifoOrderAcrossTwoListeners()
++        {
++            var scheduler = new MultiRepoPendingScheduler();
++            var listenerA = new RepositoryListenerContext { Profile = new RunnerProfile { Name = "repo-a" } };
++            var listenerB = new RepositoryListenerContext { Profile = new RunnerProfile { Name = "repo-b" } };
++
++            Assert.True(scheduler.EnqueuePending(listenerA));
++            Assert.True(scheduler.EnqueuePending(listenerB));
++
++            Assert.True(scheduler.TryDequeue(out var first));
++            Assert.True(scheduler.TryDequeue(out var second));
++
++            Assert.Equal("repo-a", first.Profile.Name);
++            Assert.Equal("repo-b", second.Profile.Name);
++        }
++
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", "Runner")]
++        public void DoesNotQueueSameListenerTwiceWhilePending()
++        {
++            var scheduler = new MultiRepoPendingScheduler();
++            var listener = new RepositoryListenerContext { Profile = new RunnerProfile { Name = "repo-a" } };
++
++            Assert.True(scheduler.EnqueuePending(listener));
++            Assert.False(scheduler.EnqueuePending(listener));
++            Assert.Equal(1, scheduler.Count);
++        }
++    }
++}
+diff --git a/src/Test/L0/Listener/RunnerProfileStoreL0.cs b/src/Test/L0/Listener/RunnerProfileStoreL0.cs
+new file mode 100644
+--- /dev/null
++++ b/src/Test/L0/Listener/RunnerProfileStoreL0.cs
+@@ -0,0 +1,149 @@
++using System;
++using System.IO;
++using System.Linq;
++using GitHub.Runner.Common;
++using GitHub.Runner.Listener.MultiRepo;
++using GitHub.Runner.Sdk;
++using Xunit;
++
++namespace GitHub.Runner.Common.Tests.Listener
++{
++    public sealed class RunnerProfileStoreL0
++    {
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", "Runner")]
++        public void LoadProfiles_ReturnsConfiguredProfiles()
++        {
++            using var hc = new TestHostContext(this);
++            var root = hc.GetDirectory(WellKnownDirectory.Root);
++            var profilesRoot = Path.Combine(root, ".runner.d");
++            var testPrefix = $"l0-{Guid.NewGuid():N}";
++
++            try
++            {
++                CreateProfile(profilesRoot, $"{testPrefix}-repo-a", "runner-a", "token-a");
++                CreateProfile(profilesRoot, $"{testPrefix}-repo-b", "runner-b", "token-b");
++
++                var discovered = RunnerProfileStore.LoadProfiles(hc);
++
++                Assert.Contains(discovered, x => x.Name == $"{testPrefix}-repo-a" && x.Settings.AgentName == "runner-a");
++                Assert.Contains(discovered, x => x.Name == $"{testPrefix}-repo-b" && x.Settings.AgentName == "runner-b");
++            }
++            finally
++            {
++                foreach (var directory in Directory.EnumerateDirectories(profilesRoot, $"{testPrefix}*", SearchOption.TopDirectoryOnly))
++                {
++                    Directory.Delete(directory, recursive: true);
++                }
++            }
++        }
++
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", "Runner")]
++        public void ActivateProfile_CopiesProfileConfigToRoot()
++        {
++            using var hc = new TestHostContext(this);
++            var root = hc.GetDirectory(WellKnownDirectory.Root);
++            var profilesRoot = Path.Combine(root, ".runner.d");
++            var testPrefix = $"l0-{Guid.NewGuid():N}";
++            string profileRoot = null;
++
++            try
++            {
++                profileRoot = CreateProfile(profilesRoot, $"{testPrefix}-repo-c", "runner-c", "token-c");
++                var profile = RunnerProfileStore.LoadProfiles(hc).Single(x => x.Name == $"{testPrefix}-repo-c");
++                WriteHiddenRootConfig(root, ".runner", "{\"AgentName\":\"existing\"}");
++                WriteHiddenRootConfig(root, ".credentials", "existing-credentials");
++                WriteHiddenRootConfig(root, ".credentials_rsaparams", "existing-rsa");
++
++                RunnerProfileStore.ActivateProfile(hc, profile);
++
++                var runnerSettings = StringUtil.ConvertFromJson<RunnerSettings>(File.ReadAllText(Path.Combine(root, ".runner")));
++                var credentials = IOUtil.LoadObject<CredentialData>(Path.Combine(root, ".credentials"));
++
++                Assert.Equal("runner-c", runnerSettings.AgentName);
++                Assert.Equal("token-c", credentials.Data[Constants.Runner.CommandLine.Args.Token]);
++                Assert.True(File.Exists(Path.Combine(root, ".credentials_rsaparams")));
++            }
++            finally
++            {
++                foreach (var file in new[] { ".runner", ".credentials", ".runner_migrated", ".credentials_migrated", ".credentials_rsaparams" })
++                {
++                    var path = Path.Combine(root, file);
++                    if (File.Exists(path))
++                    {
++                        File.Delete(path);
++                    }
++                }
++
++                if (Directory.Exists(profileRoot))
++                {
++                    Directory.Delete(profileRoot, recursive: true);
++                }
++            }
++        }
++
++        [Fact]
++        [Trait("Level", "L0")]
++        [Trait("Category", "Runner")]
++        public void CaptureAndRestoreActiveConfiguration_RestoresRootFiles()
++        {
++            using var hc = new TestHostContext(this);
++            var root = hc.GetDirectory(WellKnownDirectory.Root);
++            File.WriteAllText(Path.Combine(root, ".runner"), "{\"AgentName\":\"original\"}");
++
++            var snapshot = RunnerProfileStore.CaptureActiveConfiguration(hc);
++            File.WriteAllText(Path.Combine(root, ".runner"), "{\"AgentName\":\"mutated\"}");
++
++            RunnerProfileStore.RestoreActiveConfiguration(hc, snapshot);
++
++            var restored = File.ReadAllText(Path.Combine(root, ".runner"));
++            Assert.Contains("original", restored);
++        }
++
++        private static string CreateProfile(string profilesRoot, string profileName, string runnerName, string token)
++        {
++            var profileRoot = Path.Combine(profilesRoot, profileName);
++            Directory.CreateDirectory(profileRoot);
++
++            var settings = new RunnerSettings
++            {
++                AgentId = 1,
++                AgentName = runnerName,
++                PoolId = 2,
++                PoolName = "default",
++                ServerUrl = "https://github.com/example/" + profileName,
++                ServerUrlV2 = "https://broker.actions.githubusercontent.com/" + profileName,
++                UseV2Flow = true,
++                WorkFolder = "_work",
++            };
++
++            var credential = new CredentialData
++            {
++                Scheme = Constants.Configuration.OAuthAccessToken,
++            };
++            credential.Data[Constants.Runner.CommandLine.Args.Token] = token;
++
++            File.WriteAllText(Path.Combine(profileRoot, ".runner"), StringUtil.ConvertToJson(settings));
++            IOUtil.SaveObject(credential, Path.Combine(profileRoot, ".credentials"));
++            File.WriteAllText(Path.Combine(profileRoot, ".credentials_rsaparams"), "rsa-placeholder");
++
++            return profileRoot;
++        }
++
++        private static void WriteHiddenRootConfig(string root, string fileName, string content)
++        {
++            var path = Path.Combine(root, fileName);
++            if (File.Exists(path))
++            {
++                File.SetAttributes(path, FileAttributes.Normal);
++                File.Delete(path);
++            }
++
++            File.WriteAllText(path, content);
++            File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Hidden);
++        }
++    }
++}
+

@@ -1,0 +1,190 @@
+name: Build Runner Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "releases/**"
+    paths:
+      - "src/**"
+      - "releaseVersion"
+      - "runnerversion"
+      - "patches/**"
+      - "scripts/**"
+      - ".github/workflows/build-runner-test.yml"
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: linux-x64
+            os: ubuntu-latest
+          - runtime: linux-arm64
+            os: ubuntu-latest
+          - runtime: linux-arm
+            os: ubuntu-latest
+          - runtime: osx-x64
+            os: macos-latest
+          - runtime: osx-arm64
+            os: macos-latest
+          - runtime: win-x64
+            os: windows-latest
+          - runtime: win-arm64
+            os: windows-latest
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate runner source exists
+        shell: bash
+        run: |
+          test -f src/ActionsRunner.sln
+
+      - name: Build and package runner
+        shell: bash
+        run: |
+          scripts/build-runner.sh --source-dir "$PWD" --runtime "${{ matrix.runtime }}" --configuration Release --package
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-test-packages-${{ matrix.runtime }}
+          path: _package/*
+          if-no-files-found: error
+
+  docker:
+    needs: build
+    if: ${{ needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download linux package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: runner-test-packages-linux-*
+          path: runner-packages
+          merge-multiple: true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Prepare docker build context
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version=$(tr -d '[:space:]' < releaseVersion)
+          image_name=$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+          branch_slug=$(printf '%s' "${GITHUB_REF_NAME}" | tr '[:upper:]/' '[:lower:]-' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+|-+$//g')
+
+          mkdir -p docker-context/runner-packages docker-images
+          cp runner-packages/actions-runner-linux-x64-"${version}".tar.gz docker-context/runner-packages/
+          cp runner-packages/actions-runner-linux-arm64-"${version}".tar.gz docker-context/runner-packages/
+
+          cat > docker-context/Dockerfile <<'EOF'
+          # Source baseline: actions/runner images/Dockerfile
+          FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-noble AS build
+
+          ARG TARGETOS
+          ARG TARGETARCH
+          ARG RUNNER_VERSION
+          ARG RUNNER_CONTAINER_HOOKS_VERSION=0.7.0
+          ARG DOCKER_VERSION=29.7.2
+          ARG BUILDX_VERSION=0.36.1
+
+          RUN apt update -y && apt install curl unzip -y
+
+          WORKDIR /actions-runner
+          COPY runner-packages/ /runner-packages/
+          RUN export RUNNER_ARCH=${TARGETARCH} \
+              && if [ "$RUNNER_ARCH" = "amd64" ]; then export RUNNER_ARCH=x64 ; fi \
+              && tar xzf "/runner-packages/actions-runner-${TARGETOS}-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
+
+          RUN curl -f -L -o runner-container-hooks.zip https://github.com/actions/runner-container-hooks/releases/download/v${RUNNER_CONTAINER_HOOKS_VERSION}/actions-runner-hooks-k8s-${RUNNER_CONTAINER_HOOKS_VERSION}.zip \
+              && unzip ./runner-container-hooks.zip -d ./k8s \
+              && rm runner-container-hooks.zip
+
+          RUN curl -f -L -o runner-container-hooks.zip https://github.com/actions/runner-container-hooks/releases/download/v0.8.1/actions-runner-hooks-k8s-0.8.1.zip \
+              && unzip ./runner-container-hooks.zip -d ./k8s-novolume \
+              && rm runner-container-hooks.zip
+
+          RUN if [ "${TARGETARCH}" = "amd64" ]; then export DOCKER_ARCH=x86_64 ; fi \
+              && if [ "${TARGETARCH}" = "arm64" ]; then export DOCKER_ARCH=aarch64 ; fi \
+              && curl -fLo docker.tgz https://download.docker.com/${TARGETOS}/static/stable/${DOCKER_ARCH}/docker-${DOCKER_VERSION}.tgz \
+              && tar zxvf docker.tgz \
+              && rm -rf docker.tgz \
+              && mkdir -p /usr/local/lib/docker/cli-plugins \
+              && curl -fLo /usr/local/lib/docker/cli-plugins/docker-buildx \
+              "https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-${TARGETARCH}" \
+              && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+
+          FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-noble
+
+          ENV DEBIAN_FRONTEND=noninteractive
+          ENV RUNNER_MANUALLY_TRAP_SIG=1
+          ENV ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=1
+          ENV ImageOS=ubuntu24
+
+          RUN apt update -y \
+              && apt install -y --no-install-recommends sudo lsb-release gpg-agent software-properties-common curl jq unzip \
+              && rm -rf /var/lib/apt/lists/*
+
+          RUN add-apt-repository ppa:git-core/ppa \
+              && apt update -y \
+              && apt install -y git \
+              && rm -rf /var/lib/apt/lists/*
+
+          RUN adduser --disabled-password --gecos "" --uid 1001 runner \
+              && groupadd docker --gid 123 \
+              && usermod -aG sudo runner \
+              && usermod -aG docker runner \
+              && echo "%sudo   ALL=(ALL:ALL) NOPASSWD:ALL" > /etc/sudoers \
+              && echo "Defaults env_keep += \"DEBIAN_FRONTEND\"" >> /etc/sudoers \
+              && chmod 777 /home/runner
+
+          WORKDIR /home/runner
+
+          COPY --chown=runner:docker --from=build /actions-runner .
+          COPY --from=build /usr/local/lib/docker/cli-plugins/docker-buildx /usr/local/lib/docker/cli-plugins/docker-buildx
+
+          RUN install -o root -g root -m 755 docker/* /usr/bin/ && rm -rf docker
+
+          USER runner
+          EOF
+
+          printf 'IMAGE_NAME=ghcr.io/%s\n' "${image_name}" >> "${GITHUB_ENV}"
+          printf 'IMAGE_TAG=test-v%s-%s\n' "${version}" "${branch_slug}" >> "${GITHUB_ENV}"
+          printf 'IMAGE_ARCHIVE=actions-runner-test-v%s-%s.oci.tar\n' "${version}" "${branch_slug}" >> "${GITHUB_ENV}"
+          printf 'RUNNER_VERSION=%s\n' "${version}" >> "${GITHUB_ENV}"
+
+      - name: Build docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./docker-context
+          platforms: |
+            linux/amd64
+            linux/arm64
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          build-args: |
+            RUNNER_VERSION=${{ env.RUNNER_VERSION }}
+          outputs: type=oci,dest=docker-images/${{ env.IMAGE_ARCHIVE }}
+
+      - name: Upload docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-test-docker-image
+          path: docker-images/*
+          if-no-files-found: error
