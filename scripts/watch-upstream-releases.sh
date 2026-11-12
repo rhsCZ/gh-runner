@@ -97,6 +97,7 @@ fi
     printf 'upstream_commit=%s\n' "${upstream_commit}"
     printf 'imported_commit=%s\n' "${imported_commit}"
     printf 'release_name=%s\n' "${release_name}"
+    printf 'release_exists=%s\n' "${release_exists}"
     printf 'needs_import=%s\n' "${needs_import}"
     printf 'needs_build=%s\n' "${needs_build}"
 } >> "${GITHUB_OUTPUT:-/dev/stdout}"

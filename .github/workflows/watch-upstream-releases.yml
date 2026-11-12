@@ -13,6 +13,11 @@ on:
         description: Optional local target branch override
         required: false
         default: ""
+      rebuild_existing_release:
+        description: Re-import upstream, apply current patches, rebuild, and replace an existing release
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: watch-upstream-releases
@@ -49,7 +54,7 @@ jobs:
             --target-branch "${TARGET_BRANCH}"
 
       - name: Import source history and apply local commits
-        if: ${{ steps.upstream.outputs.needs_import == 'true' }}
+        if: ${{ steps.upstream.outputs.needs_import == 'true' || inputs.rebuild_existing_release }}
         shell: bash
         run: |
           scripts/import-upstream-history.sh \
@@ -58,13 +63,19 @@ jobs:
             --control-ref master
 
       - name: Push imported branch
-        if: ${{ steps.upstream.outputs.needs_import == 'true' }}
+        if: ${{ steps.upstream.outputs.needs_import == 'true' || inputs.rebuild_existing_release }}
         shell: bash
         run: git push --force-with-lease origin "${{ steps.upstream.outputs.target_branch }}:${{ steps.upstream.outputs.target_branch }}"
 
       - name: Dispatch build workflow
-        if: ${{ steps.upstream.outputs.needs_build == 'true' }}
+        if: ${{ (steps.upstream.outputs.needs_build == 'true' && steps.upstream.outputs.release_exists == 'false') || inputs.rebuild_existing_release }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run build-runner.yml --ref "${{ steps.upstream.outputs.target_branch }}"
+        run: |
+          args=(--ref "${{ steps.upstream.outputs.target_branch }}")
+          if [[ '${{ inputs.rebuild_existing_release }}' == 'true' ]]; then
+            args+=(--field "source_ref=${{ steps.upstream.outputs.target_branch }}")
+            args+=(--field "rebuild_existing_release=true")
+          fi
+          gh workflow run build-runner.yml "${args[@]}"

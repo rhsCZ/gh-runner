@@ -13,6 +13,16 @@ on:
         required: false
         default: ""
         type: string
+      rebuild_existing_release:
+        description: Replace assets on an existing GitHub Release
+        required: false
+        default: false
+        type: boolean
+      update_latest_on_rebuild:
+        description: Also move the latest Docker image tag when rebuilding an existing release
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build:
@@ -70,6 +80,7 @@ jobs:
     outputs:
       release_tag: ${{ steps.release.outputs.release_tag }}
       version: ${{ steps.release.outputs.version }}
+      existing_release: ${{ steps.release.outputs.existing_release }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -103,18 +114,27 @@ jobs:
           release_tag="v${version}"
           release_title="${release_tag}"
 
-          if ! gh release view "${release_tag}" >/dev/null 2>&1; then
+          if gh release view "${release_tag}" >/dev/null 2>&1; then
+            if [[ '${{ inputs.rebuild_existing_release }}' != 'true' ]]; then
+              echo "Release ${release_tag} already exists. Enable rebuild_existing_release to replace its assets." >&2
+              exit 1
+            fi
+            echo "Rebuilding existing release ${release_tag}; uploaded assets will be replaced."
+            existing_release=true
+          else
             gh release create "${release_tag}" \
               --target "$(git rev-parse HEAD)" \
               --title "${release_title}" \
               --notes "Patched GitHub Actions runner built from $(git rev-parse HEAD) (source ref: ${{ inputs.source_ref || github.ref_name }})." \
               --latest=false
+            existing_release=false
           fi
 
           gh release upload "${release_tag}" release-assets/* --clobber
 
           printf 'release_tag=%s\n' "${release_tag}" >> "${GITHUB_OUTPUT}"
           printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+          printf 'existing_release=%s\n' "${existing_release}" >> "${GITHUB_OUTPUT}"
 
   publish-image:
     needs: release
@@ -142,6 +162,13 @@ jobs:
           printf 'image_name=%s\n' "${image_name}" >> "${GITHUB_OUTPUT}"
           printf 'version_tag=%s\n' "${{ needs.release.outputs.version }}" >> "${GITHUB_OUTPUT}"
           printf 'release_tag=%s\n' "v${{ needs.release.outputs.version }}" >> "${GITHUB_OUTPUT}"
+
+          tags="${REGISTRY}/${image_name}:${{ needs.release.outputs.version }}"
+          tags+=$'\n'"${REGISTRY}/${image_name}:v${{ needs.release.outputs.version }}"
+          if [[ '${{ needs.release.outputs.existing_release }}' != 'true' || '${{ inputs.update_latest_on_rebuild }}' == 'true' ]]; then
+            tags+=$'\n'"${REGISTRY}/${image_name}:latest"
+          fi
+          printf 'tags<<EOF\n%s\nEOF\n' "${tags}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare docker build context
         shell: bash
@@ -172,10 +199,7 @@ jobs:
           platforms: |
             linux/amd64
             linux/arm64
-          tags: |
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.version_tag }}
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.release_tag }}
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.image_name }}:latest
+          tags: ${{ steps.image.outputs.tags }}
           build-args: |
             RUNNER_VERSION=${{ needs.release.outputs.version }}
           push: true
