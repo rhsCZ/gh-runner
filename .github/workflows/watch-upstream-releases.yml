@@ -77,7 +77,6 @@ jobs:
         run: git push --force-with-lease origin "${{ steps.upstream.outputs.target_branch }}:${{ steps.upstream.outputs.target_branch }}"
 
       - name: Dispatch build workflow
-        id: dispatch
         if: ${{ (steps.upstream.outputs.needs_build == 'true' && steps.upstream.outputs.release_exists == 'false') || inputs.rebuild_existing_release }}
         shell: bash
         env:
@@ -88,22 +87,4 @@ jobs:
             args+=(--field "source_ref=${{ steps.upstream.outputs.target_branch }}")
             args+=(--field "rebuild_existing_release=true")
           fi
-          if ! output=$(gh workflow run build-runner.yml "${args[@]}" 2>&1); then
-            printf '%s\n' "$output" >&2
-            exit 1
-          fi
-          printf '%s\n' "$output"
-          run_url=$(printf '%s\n' "$output" | grep -Eo 'https://github\.com/[^[:space:]]+/actions/runs/[0-9]+' | tail -1)
-          if [[ -z "$run_url" ]]; then
-            echo "Could not determine the dispatched build run ID." >&2
-            exit 1
-          fi
-          printf 'run_id=%s\n' "${run_url##*/}" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for build and release publish
-        if: ${{ steps.dispatch.outcome == 'success' }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
-        run: gh run watch "$BUILD_RUN_ID" --exit-status --interval 15
+          gh workflow run build-runner.yml "${args[@]}"
