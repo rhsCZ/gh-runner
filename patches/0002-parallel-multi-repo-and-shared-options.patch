@@ -136,19 +136,6 @@ index ffb0868..eae5bb7 100644
                          ".setup_info");
                      break;
 
-diff --git a/src/Runner.Common/RunnerGlobalOptions.cs b/src/Runner.Common/RunnerGlobalOptions.cs
-new file mode 100644
---- /dev/null
-+++ b/src/Runner.Common/RunnerGlobalOptions.cs
-@@ -0,0 +1,7 @@
-+namespace GitHub.Runner.Common
-+{
-+    public sealed class RunnerGlobalOptions
-+    {
-+        public int? MaxConcurrentJobs { get; set; }
-+    }
-+}
- 
 @@ -527,6 +528,17 @@ namespace GitHub.Runner.Common
              return path;
          }
@@ -1079,4 +1066,17 @@ index c1cf692..031b93e 100644
 +                        configRoot,
                          ".setup_info");
                      break;
+
+diff --git a/src/Runner.Common/RunnerGlobalOptions.cs b/src/Runner.Common/RunnerGlobalOptions.cs
+new file mode 100644
+--- /dev/null
++++ b/src/Runner.Common/RunnerGlobalOptions.cs
+@@ -0,0 +1,7 @@
++namespace GitHub.Runner.Common
++{
++    public sealed class RunnerGlobalOptions
++    {
++        public int? MaxConcurrentJobs { get; set; }
++    }
++}
  
